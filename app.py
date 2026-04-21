@@ -15,7 +15,6 @@ def write_styled_excel(df, buffer):
         format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
         for row_num in range(1, len(df) + 1):
             for col_num, col_name in enumerate(df.columns):
-                # Apply green if the cell contains 'X'
                 if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
@@ -88,18 +87,20 @@ with tab2:
 # --- TAB 3: PROTOCOL SHUTDOWN ---
 with tab3:
     st.header("⚙️ Protocol Shutdown Planning")
-    uploaded_file3 = st.file_uploader("Upload Shutdown File (Must have column: type)", type=['xlsx'], key="file3")
+    uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
     
     if uploaded_file3:
-        st.subheader("Enter Daily MH Capacity per Job Type")
+        st.subheader("Define Daily MH Capacity")
+        
+        # Here are your 3 cells, just like Tab 1
         c1, c2, c3 = st.columns(3)
         with c1:
-            mh_caout = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0, key="mh_caout")
+            caout_cap = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
         with c2:
-            mh_elec = st.number_input("Electrique MH", min_value=0.0, value=50.0, key="mh_elec")
+            elec_cap = st.number_input("Electrique MH", min_value=0.0, value=50.0)
         with c3:
-            mh_mech = st.number_input("Mecanique MH", min_value=0.0, value=50.0, key="mh_mech")
+            mech_cap = st.number_input("Mecanique MH", min_value=0.0, value=50.0)
             
         if st.button("Generate Gantt"):
-            st.write(f"Capacities set: Caout={mh_caout}, Elec={mh_elec}, Mech={mh_mech}")
-            # Logic will be implemented next.
+            st.write(f"Capacities loaded: Caout={caout_cap}, Elec={elec_cap}, Mech={mech_cap}")
+            # Logic will be implemented here
