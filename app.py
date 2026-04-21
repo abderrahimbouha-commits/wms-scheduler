@@ -15,7 +15,6 @@ def write_styled_excel(df, buffer):
         format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
         for row_num in range(1, len(df) + 1):
             for col_num, col_name in enumerate(df.columns):
-                # Apply green if the cell contains 'X'
                 if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
@@ -88,34 +87,40 @@ with tab2:
 # --- TAB 3: PROTOCOL SHUTDOWN ---
 with tab3:
     st.header("⚙️ Protocol Shutdown Planning")
-    uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
+    uploaded_file3 = st.file_uploader("Upload Shutdown File (Cols: OT, description, type, duree, MH)", type=['xlsx'], key="file3")
+    
     if uploaded_file3:
         df = pd.read_excel(uploaded_file3)
+        # 1. Equipment Selection
         selected_eq = st.multiselect("Select Equipment:", options=df['OT'].unique().tolist())
         
         if selected_eq:
             df_filtered = df[df['OT'].isin(selected_eq)].copy()
             
-            st.subheader("Define Work Shifts (Hours)")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                es = st.number_input("Elec Start", 0, 23, 9)
-                ee = st.number_input("Elec End", 1, 24, 19)
-            with c2:
-                ms = st.number_input("Mech Start", 0, 23, 9)
-                me = st.number_input("Mech End", 1, 24, 17)
-            with c3:
-                cs = st.number_input("Caout Start", 0, 23, 0)
-                ce = st.number_input("Caout End", 1, 24, 24)
+            # 2. Define Shifts
+            st.subheader("Define Work Shifts")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.write("**Electrique**")
+                es = st.number_input("Start Hour", 0, 23, 9, key="es")
+                ee = st.number_input("End Hour", 1, 24, 19, key="ee")
+            with col2:
+                st.write("**Mecanique**")
+                ms = st.number_input("Start Hour", 0, 23, 9, key="ms")
+                me = st.number_input("End Hour", 1, 24, 17, key="me")
+            with col3:
+                st.write("**Caoutchoutage**")
+                cs = st.number_input("Start Hour", 0, 23, 0, key="cs")
+                ce = st.number_input("End Hour", 1, 24, 24, key="ce")
             
+            # 3. Strategy
             mode = st.radio("Strategy:", ["Leveling", "Smoothing"])
-            dur = st.number_input("Shutdown Duration (Days):", 1, 365, 5) if mode == "Smoothing" else 0
+            duration = st.number_input("Shutdown Duration (Days):", 1, 365, 5) if mode == "Smoothing" else 0
             
+            # 4. Process
             if st.button("Generate Gantt"):
-                # Logic: Build columns based on shift hours
-                # Simple scheduling logic based on type shift
-                st.write("Processing... (Gantt logic active)")
-                # (You can expand the specific loop here similar to Tabs 1/2)
+                st.success("Configuration saved! (Ready for Calculation Logic)")
+                # Logic will be implemented here
                 buffer = io.BytesIO()
                 write_styled_excel(df_filtered, buffer)
                 st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
