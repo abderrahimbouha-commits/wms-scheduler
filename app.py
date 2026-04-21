@@ -92,15 +92,15 @@ with tab3:
     if uploaded_file3:
         st.subheader("Define Daily MH Capacity")
         
-        # Here are your 3 cells, just like Tab 1
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            caout_cap = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
-        with c2:
-            elec_cap = st.number_input("Electrique MH", min_value=0.0, value=50.0)
-        with c3:
-            mech_cap = st.number_input("Mecanique MH", min_value=0.0, value=50.0)
+        # 3 side-by-side cells for MH entry
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            mh_caout = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
+        with col2:
+            mh_elec = st.number_input("Electrique MH", min_value=0.0, value=50.0)
+        with col3:
+            mh_mech = st.number_input("Mecanique MH", min_value=0.0, value=50.0)
             
         if st.button("Generate Gantt"):
-            st.write(f"Capacities loaded: Caout={caout_cap}, Elec={elec_cap}, Mech={mech_cap}")
+            st.success(f"Config saved: Caout={mh_caout}, Elec={mh_elec}, Mech={mh_mech}")
             # Logic will be implemented here
