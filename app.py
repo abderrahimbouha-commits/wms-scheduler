@@ -59,3 +59,48 @@ with tab1:
         buffer = io.BytesIO()
         write_styled_excel(df, buffer)
         st.download_button("Download Schedule", buffer, "Smooth_Schedule.xlsx", mime="application/vnd.ms-excel")
+
+# --- TAB 2: DAILY LEVELING ---
+with tab2:
+    st.info("💡 **Required Columns:** `OT`, `Equipment`, `duree`, `MH`, `Section`")
+    uploaded_file2 = st.file_uploader("Upload Daily Schedule File", type=['xlsx'], key="file2")
+    if uploaded_file2 and st.button("Generate Leveling", key="btn2"):
+        df = pd.read_excel(uploaded_file2)
+        df = df.sort_values(by=['Equipment', 'MH'], ascending=[True, False])
+        hourly_load = np.zeros(8)
+        for h in range(9, 17): df[f"{h:02d}:00"] = ""
+        for idx, row in df.iterrows():
+            duration = int(np.clip(np.ceil(row['duree']), 1, 8))
+            mh_per_hour = row['MH'] / row['duree']
+            min_load = float('inf')
+            best_start = 0
+            for start in range(8 - duration + 1):
+                if np.sum(hourly_load[start : start + duration]) < min_load:
+                    min_load = np.sum(hourly_load[start : start + duration])
+                    best_start = start
+            hourly_load[best_start : best_start + duration] += mh_per_hour
+            for i in range(duration): df.at[idx, f"{9+best_start+i:02d}:00"] = "X"
+        buffer = io.BytesIO()
+        write_styled_excel(df, buffer)
+        st.download_button("Download Leveling", buffer, "Daily_Leveling.xlsx", mime="application/vnd.ms-excel")
+
+# --- TAB 3: PROTOCOL SHUTDOWN ---
+with tab3:
+    st.header("⚙️ Protocol Shutdown Planning")
+    uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
+    
+    if uploaded_file3:
+        st.subheader("Define Daily MH Capacity")
+        
+        # 3 side-by-side cells for MH entry
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            mh_caout = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
+        with col2:
+            mh_elec = st.number_input("Electrique MH", min_value=0.0, value=50.0)
+        with col3:
+            mh_mech = st.number_input("Mecanique MH", min_value=0.0, value=50.0)
+            
+        if st.button("Generate Gantt"):
+            st.success(f"Config saved: Caout={mh_caout}, Elec={mh_elec}, Mech={mh_mech}")
+            # Logic will be implemented here
