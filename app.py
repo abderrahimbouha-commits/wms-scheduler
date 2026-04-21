@@ -15,10 +15,11 @@ def write_styled_excel(df, buffer):
         # Green format for busy hours
         format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
         
-        # Apply color to the time columns
+        # Apply color to the time columns (searching for 'X')
         for row_num in range(1, len(df) + 1):
             for col_num, col_name in enumerate(df.columns):
-                if "00" in col_name and df.iloc[row_num-1, col_num] == "X":
+                # Check if it's a time column and contains 'X'
+                if ":00" in col_name and df.iloc[row_num-1, col_num] == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
 # Tabs
@@ -37,42 +38,56 @@ with tab1:
         # Create Schedule Grid
         for h in range(9, 17): df[f"{h:02d}:00"] = ""
         
-        # Simple Greedy Smoothing
+        hourly_cap = daily_cap / 8.0
+        usage_tracker = {}
+        results_day, results_start, results_end = [], [], []
+        
         for idx, row in df.iterrows():
             duration = int(np.clip(np.ceil(row['duree']), 1, 8))
-            # Just marking the first available slots for demo
-            for i in range(duration):
-                col_name = f"{9+i:02d}:00"
-                df.at[idx, col_name] = "X"
+            mh_per_hour = row['MH'] / row['duree']
+            found_slot = False
+            check_day = 0
+            
+            while not found_slot and check_day < 365:
+                if check_day not in usage_tracker:
+                    usage_tracker[check_day] = np.zeros(8)
+                day_load = usage_tracker[check_day]
+                
+                for start_h in range(8 - duration + 1):
+                    if all(day_load[start_h : start_h + duration] + mh_per_hour <= hourly_cap + 0.001):
+                        day_load[start_h : start_h + duration] += mh_per_hour
+                        for i in range(duration):
+                            df.at[idx, f"{9+start_h+i:02d}:00"] = "X"
+                        results_day.append(check_day + 1) # Added as raw number
+                        results_start.append(f"{9+start_h:02d}:00")
+                        results_end.append(f"{9+start_h+duration:02d}:00")
+                        found_slot = True
+                        break
+                check_day += 1
+        
+        df['Scheduled Day'] = results_day
+        df['Start Hour'] = results_start
+        df['End Hour'] = results_end
         
         st.success("Smoothing complete!")
         buffer = io.BytesIO()
         write_styled_excel(df, buffer)
         st.download_button("Download Colored Schedule", buffer, "Smooth_Schedule.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 2: DAILY LEVELING (THE NEW BALANCED LOGIC) ---
+# --- TAB 2: DAILY LEVELING ---
 with tab2:
     st.info("💡 **Required Columns:** `OT`, `Equipment`, `duree`, `MH`, `Section`")
     uploaded_file2 = st.file_uploader("Upload Daily Schedule File", type=['xlsx'], key="file2")
     
     if uploaded_file2 and st.button("Generate Leveling", key="btn2"):
         df = pd.read_excel(uploaded_file2)
-        
-        # Hourly Load Tracker (9am to 4pm = 8 slots)
-        # Using 0 to 7 to represent 9am to 4pm
         hourly_load = {i: 0.0 for i in range(8)}
-        
-        # Sort by MH Descending to place "heavy" tasks first
         df = df.sort_values(by=['MH'], ascending=False)
         
-        # Prepare Result Columns
         for h in range(9, 17): df[f"{h:02d}:00"] = ""
         
         for idx, row in df.iterrows():
             duration = int(np.clip(np.ceil(row['duree']), 1, 8))
-            
-            # Find the best window: Find the hour with the minimum current load
-            # This balances the work evenly
             min_load = float('inf')
             best_start = 0
             for start in range(8 - duration + 1):
@@ -81,13 +96,11 @@ with tab2:
                     min_load = window_load
                     best_start = start
             
-            # Assign task to this window
             for i in range(duration):
-                hourly_load[best_start + i] += row['MH'] # Add MH load
+                hourly_load[best_start + i] += row['MH']
                 df.at[idx, f"{9+best_start+i:02d}:00"] = "X"
         
-        st.success("Leveling complete! Workload balanced across the day.")
-        
+        st.success("Leveling complete! Workload balanced.")
         buffer = io.BytesIO()
         write_styled_excel(df, buffer)
         st.download_button("Download Colored Leveling", buffer, "Daily_Leveling.xlsx", mime="application/vnd.ms-excel")
