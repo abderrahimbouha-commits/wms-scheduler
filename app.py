@@ -90,18 +90,16 @@ with tab3:
     uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
     
     if uploaded_file3:
-        df = pd.read_excel(uploaded_file3)
+        # These are the 3 cells you requested for MH entry
+        st.subheader("Define Daily MH Capacity per Job Type")
+        col1, col2, col3 = st.columns(3)
         
-        # 1. Enter MH Capacities per Type
-        st.subheader("Enter Daily MH Capacity per Job Type")
-        c1, c2, c3 = st.columns(3)
-        with c1:
+        with col1:
             mh_caout = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0, key="mh_caout")
-        with c2:
+        with col2:
             mh_elec = st.number_input("Electrique MH", min_value=0.0, value=50.0, key="mh_elec")
-        with c3:
+        with col3:
             mh_mech = st.number_input("Mecanique MH", min_value=0.0, value=50.0, key="mh_mech")
             
-        if st.button("Generate Gantt"):
-            st.success(f"Config saved: Caout={mh_caout}, Elec={mh_elec}, Mech={mh_mech}")
-            # The calculation logic will be placed here next.
+        st.write("---")
+        st.write("Ready for the next step.")
