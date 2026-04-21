@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 import io
 
-st.set_page_config(page_title="WMS Scheduler", layout="wide")
-st.title("🏗️ WMS Resource Smoothing Portal")
+st.set_page_config(page_title="Resource Leveling/Smoothing", layout="wide")
+st.title("🏗️ Resource Leveling & Smoothing Portal")
 
 # Create Tabs
 tab1, tab2 = st.tabs(["Resource Smoothing", "Daily Leveling"])
