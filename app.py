@@ -26,13 +26,11 @@ with tab1:
     st.info("💡 **Required Columns:** `Equipment`, `OT`, `duree`, `MH`")
     uploaded_file1 = st.file_uploader("Upload WMS File", type=['xlsx'], key="file1")
     daily_cap = st.number_input("Enter Daily MH Capacity:", value=100.0, key="cap1")
-    
     if uploaded_file1 and st.button("Generate Smoothing", key="btn1"):
         df = pd.read_excel(uploaded_file1)
         df = df.sort_values(by=['Equipment', 'MH'], ascending=[True, False])
         hourly_cap = daily_cap / 8.0
         for h in range(9, 17): df[f"{h:02d}:00"] = ""
-        
         usage_tracker = {}
         results_day, results_start, results_end = [], [], []
         for idx, row in df.iterrows():
@@ -90,17 +88,52 @@ with tab3:
     uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
     
     if uploaded_file3:
+        df = pd.read_excel(uploaded_file3)
         st.subheader("Define Daily MH Capacity")
         
-        # 3 side-by-side cells for MH entry
+        # 3 inputs for the 3 types
         col1, col2, col3 = st.columns(3)
-        with col1:
-            mh_caout = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
-        with col2:
-            mh_elec = st.number_input("Electrique MH", min_value=0.0, value=50.0)
-        with col3:
-            mh_mech = st.number_input("Mecanique MH", min_value=0.0, value=50.0)
-            
+        mh_caout = col1.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
+        mh_elec = col2.number_input("Electrique MH", min_value=0.0, value=50.0)
+        mh_mech = col3.number_input("Mecanique MH", min_value=0.0, value=50.0)
+        
         if st.button("Generate Gantt"):
-            st.success(f"Config saved: Caout={mh_caout}, Elec={mh_elec}, Mech={mh_mech}")
-            # Logic will be implemented here
+            # Prepare capacities dictionary
+            caps = {'Caoutchoutage': mh_caout/8.0, 'Electrique': mh_elec/8.0, 'Mecanique': mh_mech/8.0}
+            
+            # Prepare columns
+            for h in range(9, 17): df[f"{h:02d}:00"] = ""
+            df['Scheduled Day'], df['Start Hour'], df['End Hour'] = 0, "", ""
+            
+            # Dictionary to track state for each type independently
+            trackers = {t: {} for t in caps.keys()}
+            
+            for idx, row in df.iterrows():
+                t = row['type']
+                if t not in caps: continue
+                
+                duration = int(np.clip(np.ceil(row['duree']), 1, 8))
+                mh_per_hour = row['MH'] / row['duree']
+                hourly_cap = caps[t]
+                
+                found_slot = False
+                check_day = 0
+                while not found_slot and check_day < 365:
+                    if check_day not in trackers[t]: trackers[t][check_day] = np.zeros(8)
+                    day_load = trackers[t][check_day]
+                    
+                    for start_h in range(8 - duration + 1):
+                        if all(day_load[start_h : start_h + duration] + mh_per_hour <= hourly_cap + 0.01):
+                            trackers[t][check_day][start_h : start_h + duration] += mh_per_hour
+                            for i in range(duration): df.at[idx, f"{9+start_h+i:02d}:00"] = "X"
+                            df.at[idx, 'Scheduled Day'] = check_day + 1
+                            df.at[idx, 'Start Hour'] = f"{9+start_h:02d}:00"
+                            df.at[idx, 'End Hour'] = f"{9+start_h+duration:02d}:00"
+                            found_slot = True
+                            break
+                    check_day += 1
+            
+            buffer = io.BytesIO()
+            write_styled_excel(df, buffer)
+            st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
+            st.success("Gantt generated successfully!")
