@@ -21,7 +21,7 @@ def write_styled_excel(df, buffer):
 # Tabs
 tab1, tab2, tab3 = st.tabs(["Resource Smoothing", "Daily Leveling", "Protocol Shutdown"])
 
-# --- TAB 1: RESOURCE SMOOTHING ---
+# --- TAB 1: RESOURCE SMOOTHING (Proven Working Version) ---
 with tab1:
     st.info("💡 **Required Columns:** `Equipment`, `OT`, `duree`, `MH`")
     uploaded_file1 = st.file_uploader("Upload WMS File", type=['xlsx'], key="file1")
@@ -84,22 +84,61 @@ with tab2:
         write_styled_excel(df, buffer)
         st.download_button("Download Leveling", buffer, "Daily_Leveling.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 3: PROTOCOL SHUTDOWN ---
+# --- TAB 3: PROTOCOL SHUTDOWN (Logic replicated for 3 types) ---
 with tab3:
     st.header("⚙️ Protocol Shutdown Planning")
-    uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
+    uploaded_file3 = st.file_uploader("Upload Shutdown File (Columns: OT, type, duree, MH)", type=['xlsx'], key="file3")
     
     if uploaded_file3:
-        # These are the 3 cells you requested for MH entry
-        st.subheader("Define Daily MH Capacity per Job Type")
-        col1, col2, col3 = st.columns(3)
+        df = pd.read_excel(uploaded_file3)
         
-        with col1:
-            mh_caout = st.number_input("Caoutchoutage MH", min_value=0.0, value=50.0, key="mh_caout")
-        with col2:
-            mh_elec = st.number_input("Electrique MH", min_value=0.0, value=50.0, key="mh_elec")
-        with col3:
-            mh_mech = st.number_input("Mecanique MH", min_value=0.0, value=50.0, key="mh_mech")
+        # 1. Inputs for the 3 types
+        col1, col2, col3 = st.columns(3)
+        with col1: mh_caout = st.number_input("Caoutchoutage Capacity (MH)", value=50.0)
+        with col2: mh_elec = st.number_input("Electrique Capacity (MH)", value=50.0)
+        with col3: mh_mech = st.number_input("Mecanique Capacity (MH)", value=50.0)
+        
+        # Mapping for the code
+        caps = {'Caoutchoutage': mh_caout/8.0, 'Electrique': mh_elec/8.0, 'Mecanique': mh_mech/8.0}
+        
+        if st.button("Generate Shutdown Gantt"):
+            df = df.sort_values(by=['type', 'MH'], ascending=[True, False])
+            for h in range(9, 17): df[f"{h:02d}:00"] = ""
             
-        st.write("---")
-        st.write("Ready for the next step.")
+            # Tracker dictionary: tracks {type: {day: [hourly_load_array]}}
+            trackers = {t: {} for t in caps.keys()}
+            results_day, results_start, results_end = [], [], []
+            
+            for idx, row in df.iterrows():
+                job_type = row['type']
+                if job_type not in caps: 
+                    st.warning(f"Skipping row: Unknown type '{job_type}'")
+                    continue
+                
+                duration = int(np.clip(np.ceil(row['duree']), 1, 8))
+                mh_per_hour = row['MH'] / row['duree']
+                hourly_cap = caps[job_type]
+                
+                found_slot = False
+                check_day = 0
+                while not found_slot and check_day < 365:
+                    if check_day not in trackers[job_type]: trackers[job_type][check_day] = np.zeros(8)
+                    day_load = trackers[job_type][check_day]
+                    
+                    for start_h in range(8 - duration + 1):
+                        if all(day_load[start_h : start_h + duration] + mh_per_hour <= hourly_cap + 0.01):
+                            trackers[job_type][check_day][start_h : start_h + duration] += mh_per_hour
+                            for i in range(duration): df.at[idx, f"{9+start_h+i:02d}:00"] = "X"
+                            results_day.append(check_day + 1)
+                            results_start.append(f"{9+start_h:02d}:00")
+                            results_end.append(f"{9+start_h+duration:02d}:00")
+                            found_slot = True
+                            break
+                    check_day += 1
+            
+            df['Scheduled Day'] = results_day
+            df['Start Hour'] = results_start
+            df['End Hour'] = results_end
+            buffer = io.BytesIO()
+            write_styled_excel(df, buffer)
+            st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
