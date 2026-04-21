@@ -87,40 +87,47 @@ with tab2:
 # --- TAB 3: PROTOCOL SHUTDOWN ---
 with tab3:
     st.header("⚙️ Protocol Shutdown Planning")
-    uploaded_file3 = st.file_uploader("Upload Shutdown File (Cols: OT, description, type, duree, MH)", type=['xlsx'], key="file3")
+    # File upload checking columns
+    uploaded_file3 = st.file_uploader("Upload Shutdown File (Must contain: OT, description, type, duree, MH)", type=['xlsx'], key="file3")
     
     if uploaded_file3:
         df = pd.read_excel(uploaded_file3)
-        # 1. Equipment Selection
-        selected_eq = st.multiselect("Select Equipment:", options=df['OT'].unique().tolist())
-        
-        if selected_eq:
-            df_filtered = df[df['OT'].isin(selected_eq)].copy()
+        # Check required columns
+        required = ['OT', 'description', 'type', 'duree', 'MH']
+        if all(col in df.columns for col in required):
             
-            # 2. Define Shifts
-            st.subheader("Define Work Shifts")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.write("**Electrique**")
-                es = st.number_input("Start Hour", 0, 23, 9, key="es")
-                ee = st.number_input("End Hour", 1, 24, 19, key="ee")
-            with col2:
-                st.write("**Mecanique**")
-                ms = st.number_input("Start Hour", 0, 23, 9, key="ms")
-                me = st.number_input("End Hour", 1, 24, 17, key="me")
-            with col3:
-                st.write("**Caoutchoutage**")
-                cs = st.number_input("Start Hour", 0, 23, 0, key="cs")
-                ce = st.number_input("End Hour", 1, 24, 24, key="ce")
+            selected_eq = st.multiselect("Select Equipment:", options=df['OT'].unique().tolist())
             
-            # 3. Strategy
-            mode = st.radio("Strategy:", ["Leveling", "Smoothing"])
-            duration = st.number_input("Shutdown Duration (Days):", 1, 365, 5) if mode == "Smoothing" else 0
-            
-            # 4. Process
-            if st.button("Generate Gantt"):
-                st.success("Configuration saved! (Ready for Calculation Logic)")
-                # Logic will be implemented here
-                buffer = io.BytesIO()
-                write_styled_excel(df_filtered, buffer)
-                st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
+            if selected_eq:
+                df_filtered = df[df['OT'].isin(selected_eq)].copy()
+                
+                # Input for Shift Calendars
+                st.subheader("Define Work Shifts")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.write("🔧 **Electrique**")
+                    elec_s = st.number_input("Start", 0, 23, 9, key="elec_s")
+                    elec_e = st.number_input("End", 1, 24, 19, key="elec_e")
+                with col2:
+                    st.write("⚙️ **Mecanique**")
+                    mech_s = st.number_input("Start", 0, 23, 9, key="mech_s")
+                    mech_e = st.number_input("End", 1, 24, 17, key="mech_e")
+                with col3:
+                    st.write("🌊 **Caoutchoutage**")
+                    caot_s = st.number_input("Start", 0, 23, 0, key="caot_s")
+                    caot_e = st.number_input("End", 1, 24, 24, key="caot_e")
+                
+                # Mode selection
+                mode = st.radio("Select Strategy:", ["Leveling", "Smoothing"])
+                duration = 0
+                if mode == "Smoothing":
+                    duration = st.number_input("Shutdown Duration (Days):", 1, 365, 5)
+                
+                if st.button("Generate Shutdown Gantt"):
+                    st.success(f"Data processed for {len(df_filtered)} tasks.")
+                    # Calculation logic will be added here
+                    buffer = io.BytesIO()
+                    write_styled_excel(df_filtered, buffer)
+                    st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
+        else:
+            st.error(f"Missing columns. Required: {required}")
