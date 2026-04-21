@@ -7,16 +7,17 @@ st.set_page_config(page_title="WMS Scheduler", layout="wide")
 st.title("🏗️ WMS Resource Smoothing Portal")
 
 # --- UI INPUTS ---
-uploaded_file = st.file_uploader("Upload your WMS Excel file (Columns: Equipment, MH, duree)", type=['xlsx'])
+uploaded_file = st.file_uploader("Upload your WMS Excel file (Columns: Equipment, OT, MH, duree)", type=['xlsx'])
 daily_cap = st.number_input("Enter Daily MH Capacity:", value=100.0)
 
 # --- LOGIC ---
 if uploaded_file is not None and st.button("Generate Schedule"):
     df = pd.read_excel(uploaded_file)
     
-    # 1. Validation
-    if 'Equipment' not in df.columns or 'MH' not in df.columns or 'duree' not in df.columns:
-        st.error("Your Excel must have these exact columns: Equipment, MH, duree")
+    # 1. Validation (Added 'OT' here)
+    required_cols = ['Equipment', 'OT', 'MH', 'duree']
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"Your Excel is missing one of these required columns: {required_cols}")
     else:
         # 2. Sort by Equipment so the team focuses on one unit at a time
         df = df.sort_values(by=['Equipment'])
@@ -26,7 +27,7 @@ if uploaded_file is not None and st.button("Generate Schedule"):
         
         results_day, results_start, results_end = [], [], []
         
-        # Create schedule columns
+        # Create schedule columns for the grid
         for h in range(9, 17):
             df[f"{h:02d}:00"] = ""
 
@@ -70,7 +71,7 @@ if uploaded_file is not None and st.button("Generate Schedule"):
         df['End Hour'] = results_end
 
         # 4. Success and Download
-        st.success("Smoothing Complete! Tasks sorted by Equipment.")
+        st.success("Smoothing Complete! Tasks sorted by Equipment (OT column preserved).")
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
