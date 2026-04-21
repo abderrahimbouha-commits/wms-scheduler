@@ -14,10 +14,8 @@ def write_styled_excel(df, buffer):
         worksheet = writer.sheets['Schedule']
         format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
         
-        # Apply color to the time columns
         for row_num in range(1, len(df) + 1):
             for col_num, col_name in enumerate(df.columns):
-                # We check if the cell contains 'X' and is a time column
                 if ":00" in col_name and df.iloc[row_num-1, col_num] == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
@@ -33,9 +31,9 @@ with tab1:
     if uploaded_file1 and st.button("Generate Schedule", key="btn1"):
         df = pd.read_excel(uploaded_file1)
         
-        # IMPORTANT FIX: Sort by Equipment (ASC) and then MH (DESC)
-        # This fills the day with the 'heavy' tasks first
-        df = df.sort_values(by=['Equipment', 'MH'], ascending=[True, False])
+        # IMPROVED PACKING: Sort by MH (Largest first), then by Equipment
+        # This fills the "biggest" tasks first, allowing small tasks to fill the gaps
+        df = df.sort_values(by=['MH', 'Equipment'], ascending=[False, True])
         
         for h in range(9, 17): df[f"{h:02d}:00"] = ""
         
@@ -54,9 +52,9 @@ with tab1:
                     usage_tracker[check_day] = np.zeros(8)
                 day_load = usage_tracker[check_day]
                 
-                # Try to fit the task
+                # Check for space
                 for start_h in range(8 - duration + 1):
-                    # Check if adding this task keeps us under or at capacity
+                    # Check if fits (using a small buffer 0.001 to avoid float errors)
                     if all(day_load[start_h : start_h + duration] + mh_per_hour <= hourly_cap + 0.001):
                         day_load[start_h : start_h + duration] += mh_per_hour
                         for i in range(duration):
