@@ -2,9 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+from openai import OpenAI
+import re
 
 st.set_page_config(page_title="Resource Leveling & Smoothing", layout="wide")
 st.title("🏗️ Resource Leveling & Smoothing Portal")
+
+# Initialisation du client OpenAI (utilisera st.secrets["OPENAI_API_KEY"])
+# Si vous n'avez pas encore de clé, la partie Tab 4 affichera une erreur, mais les Tabs 1, 2, 3 fonctionneront.
+try:
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except:
+    client = None
 
 # --- Helper: Apply Colors to Excel ---
 def write_styled_excel(df, buffer):
@@ -18,8 +27,8 @@ def write_styled_excel(df, buffer):
                 if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
-# Tabs
-tab1, tab2, tab3 = st.tabs(["Resource Smoothing", "Daily Leveling", "Protocol Shutdown"])
+# --- NOUVEAUX ONGLETS (Ajout de "Audio to Excel") ---
+tab1, tab2, tab3, tab4 = st.tabs(["Resource Smoothing", "Daily Leveling", "Protocol Shutdown", "🎙️ Audio to Excel"])
 
 # --- TAB 1: RESOURCE SMOOTHING ---
 with tab1:
@@ -90,38 +99,27 @@ with tab3:
     if uploaded_file3:
         df = pd.read_excel(uploaded_file3)
         st.subheader("Define Daily MH Capacity")
-        
-        # 3 inputs for the 3 types
         col1, col2, col3 = st.columns(3)
         mh_caout = col1.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
         mh_elec = col2.number_input("Electrique MH", min_value=0.0, value=50.0)
         mh_mech = col3.number_input("Mecanique MH", min_value=0.0, value=50.0)
         
         if st.button("Generate Gantt"):
-            # Prepare capacities dictionary
             caps = {'Caoutchoutage': mh_caout/8.0, 'Electrique': mh_elec/8.0, 'Mecanique': mh_mech/8.0}
-            
-            # Prepare columns
             for h in range(9, 17): df[f"{h:02d}:00"] = ""
             df['Scheduled Day'], df['Start Hour'], df['End Hour'] = 0, "", ""
-            
-            # Dictionary to track state for each type independently
             trackers = {t: {} for t in caps.keys()}
-            
             for idx, row in df.iterrows():
                 t = row['type']
                 if t not in caps: continue
-                
                 duration = int(np.clip(np.ceil(row['duree']), 1, 8))
                 mh_per_hour = row['MH'] / row['duree']
                 hourly_cap = caps[t]
-                
                 found_slot = False
                 check_day = 0
                 while not found_slot and check_day < 365:
                     if check_day not in trackers[t]: trackers[t][check_day] = np.zeros(8)
                     day_load = trackers[t][check_day]
-                    
                     for start_h in range(8 - duration + 1):
                         if all(day_load[start_h : start_h + duration] + mh_per_hour <= hourly_cap + 0.01):
                             trackers[t][check_day][start_h : start_h + duration] += mh_per_hour
@@ -132,8 +130,62 @@ with tab3:
                             found_slot = True
                             break
                     check_day += 1
-            
             buffer = io.BytesIO()
             write_styled_excel(df, buffer)
             st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
-            st.success("Gantt generated successfully!")
+
+# --- TAB 4: AUDIO TO EXCEL (La nouveauté) ---
+with tab4:
+    st.header("🎙️ Transcription Vocale vers Excel")
+    st.write("Dites : 'Equipement [Nom], Duree [Nombre], MH [Nombre], Description [Texte]'")
+    
+    if client is None:
+        st.warning("⚠️ Clé API OpenAI manquante dans les Secrets de Streamlit.")
+    
+    audio_data = st.audio_input("Enregistrez votre rapport")
+
+    if audio_data and client:
+        if st.button("Convertir l'Audio"):
+            with st.spinner("Analyse en cours..."):
+                # 1. Transcription Whisper
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1", 
+                    file=audio_data
+                )
+                raw_text = transcript.text
+                st.info(f"Texte reconnu : {raw_text}")
+
+                # 2. Extraction Structurée par GPT
+                prompt = f"""
+                Extrais les informations suivantes du texte : Equipement, Duree, MH, Description.
+                Texte : {raw_text}
+                Réponds UNIQUEMENT sous ce format : Valeur1 | Valeur2 | Valeur3 | Valeur4
+                """
+                
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                
+                # 3. Création du DataFrame
+                try:
+                    result_list = response.choices.message.content.split("|")
+                    # On s'assure d'avoir 4 éléments
+                    result_list = [item.strip() for item in result_list]
+                    df_audio = pd.DataFrame([result_list], columns=["Equipement", "Duree", "MH", "Description"])
+                    
+                    st.success("Données extraites !")
+                    st.table(df_audio)
+
+                    # 4. Export Excel
+                    audio_buffer = io.BytesIO()
+                    df_audio.to_excel(audio_buffer, index=False)
+                    
+                    st.download_button(
+                        label="📥 Télécharger l'Excel Audio",
+                        data=audio_buffer.getvalue(),
+                        file_name="audio_report.xlsx",
+                        mime="application/vnd.ms-excel"
+                    )
+                except Exception as e:
+                    st.error(f"Erreur lors de l'extraction des données : {e}")
