@@ -4,12 +4,20 @@ import numpy as np
 import io
 from openai import OpenAI
 
-st.set_page_config(page_title="Resource Leveling & Smoothing", layout="wide")
+# 1. Page Configuration with Logo as Favicon
+st.set_page_config(
+    page_title="Resource Leveling & Smoothing", 
+    page_icon="https://brandfetch.com/jesagroup.com?view=library&library=default", # JESA Icon
+    layout="wide"
+)
+
+# 2. Display JESA Logo in the Sidebar
+st.logo("https://brandfetch.com/jesagroup.com?view=library&library=default")
+
 st.title("🏗️ Resource Leveling & Smoothing Portal")
 
-# --- Initialize OpenAI Client (Uses the Secret Key we just set up) ---
+# --- Initialize OpenAI Client ---
 try:
-    # This looks for the key in the "Secrets" we just configured
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except Exception:
     client = None
@@ -26,8 +34,8 @@ def write_styled_excel(df, buffer):
                 if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
-# --- TABS (Added the 4th Tab) ---
-tab1, tab2, tab3, tab4 = st.tabs(["Resource Smoothing", "Daily Leveling", "Protocol Shutdown", "🎙️ Audio to Excel"])
+# --- TABS (Renamed the 4th tab to 'Sheet Report') ---
+tab1, tab2, tab3, tab4 = st.tabs(["Resource Smoothing", "Daily Leveling", "Protocol Shutdown", "🎙️ Sheet Report"])
 
 # --- TAB 1: RESOURCE SMOOTHING ---
 with tab1:
@@ -133,62 +141,42 @@ with tab3:
             write_styled_excel(df, buffer)
             st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-# --- NEW TAB 4: AUDIO TO EXCEL ---
+# --- TAB 4: SHEET REPORT (Voice Entries) ---
 with tab4:
-    st.header("🎙️ Voice Transcription to Excel")
+    st.header("🎙️ Voice Entry Sheet Report")
     st.markdown("""
-    **Instructions:** Speak clearly. Try to say:  
-    *"Equipment [Name], Duration [Number], MH [Number], Description [Your text]"*
+    **Instructions:** Record your data. Speak clearly:  
+    *"Equipment [Name], Duration [Number], MH [Number], Description [Details]"*
     """)
     
     if client is None:
-        st.error("🔑 OpenAI Key not found. Please add it to Streamlit Secrets.")
+        st.error("🔑 OpenAI Key not found in Streamlit Secrets.")
     
-    # Audio recorder widget
-    audio_data = st.audio_input("Record your information")
+    audio_data = st.audio_input("Record entry")
 
     if audio_data and client:
-        if st.button("Process Audio"):
-            with st.spinner("Analyzing your voice..."):
-                # 1. Convert Speech to Text
+        if st.button("Generate Entry"):
+            with st.spinner("Processing..."):
                 transcript = client.audio.transcriptions.create(
                     model="whisper-1", 
                     file=audio_data
                 )
                 raw_text = transcript.text
-                st.info(f"Recognized Text: {raw_text}")
+                st.info(f"Text: {raw_text}")
 
-                # 2. Extract Data using AI
-                prompt = f"""
-                Extract these fields: Equipment, Duree, MH, Description.
-                From this text: {raw_text}
-                Answer only in this format: Value1 | Value2 | Value3 | Value4
-                """
-                
+                prompt = f"Extract fields: Equipment, Duree, MH, Description from: {raw_text}. Format: Val1 | Val2 | Val3 | Val4"
                 response = client.chat.completions.create(
                     model="gpt-3.5-turbo",
                     messages=[{"role": "user", "content": prompt}]
                 )
                 
-                # 3. Build the Excel Data
                 try:
-                    raw_values = response.choices.message.content.split("|")
-                    values = [v.strip() for v in raw_values]
-                    
-                    df_audio = pd.DataFrame([values], columns=["Equipment", "Duree", "MH", "Description"])
-                    
-                    st.success("Data Extracted Successfully!")
+                    vals = [v.strip() for v in response.choices.message.content.split("|")]
+                    df_audio = pd.DataFrame([vals], columns=["Equipment", "Duree", "MH", "Description"])
                     st.table(df_audio)
 
-                    # 4. Excel Download Button
                     audio_buffer = io.BytesIO()
                     df_audio.to_excel(audio_buffer, index=False)
-                    
-                    st.download_button(
-                        label="📥 Download as Excel",
-                        data=audio_buffer.getvalue(),
-                        file_name="voice_entry.xlsx",
-                        mime="application/vnd.ms-excel"
-                    )
-                except Exception as e:
-                    st.error("The AI had trouble formatting the data. Try speaking more clearly!")
+                    st.download_button("📥 Download Excel Report", audio_buffer, "voice_report.xlsx")
+                except:
+                    st.error("Format error. Please try again.")
