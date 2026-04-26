@@ -6,25 +6,14 @@ from openai import OpenAI
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# --- 1. PAGE CONFIG & LOGO ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(
     page_title="JESA - Resource Portal", 
     page_icon="🏗️", 
     layout="wide"
 )
 
-# Using a high-quality direct link for the JESA logo
-jesa_logo = "https://vector.ma"
-
-# Display JESA Logo in the Sidebar
-st.logo(jesa_logo)
-
-# Display JESA Logo on the Front Page header
-col1, col2 = st.columns([1, 10])
-with col1:
-    st.image(jesa_logo, width=100)
-with col2:
-    st.title("Resource Leveling & Smoothing Portal")
+st.title("🏗️ Resource Leveling & Smoothing Portal")
 
 # --- 2. INITIALIZE CONNECTIONS ---
 try:
@@ -51,12 +40,12 @@ def append_to_gsheet(new_data_row):
     updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
     conn.update(data=updated_df)
 
-# --- 4. TABS DEFINITION ---
+# --- 4. TABS DEFINITION (Renamed to 'Shift Report') ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Resource Smoothing", 
     "Daily Leveling", 
     "Protocol Shutdown", 
-    "🎙️ Sheet Report", 
+    "🎙️ Shift Report", 
     "🔐 Admin Panel"
 ])
 
@@ -162,11 +151,11 @@ with tab3:
             write_styled_excel(df, buffer)
             st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 4: SHEET REPORT (Voice Entry) ---
+# --- TAB 4: SHIFT REPORT (Voice Entry) ---
 with tab4:
-    st.header("🎙️ Voice Entry Sheet Report")
-    st.info("Record entries: Equipment, Duration, MH, and Description.")
-    audio_data = st.audio_input("Record your entry", key="voice_report_jesa")
+    st.header("🎙️ Voice Entry Shift Report")
+    st.info("Instructions: Record entries by speaking clearly. Mention: Equipment, Duration, MH, and Description.")
+    audio_data = st.audio_input("Record your report", key="shift_voice_rec")
 
     if audio_data and client:
         if st.button("Submit to Database"):
@@ -182,36 +171,44 @@ with tab4:
                     )
                     
                     vals = [v.strip() for v in response.choices.message.content.split("|")]
+                    
                     new_entry = {
                         "Date": datetime.now().strftime("%Y-%m-%d"),
-                        "Equipment": vals,
-                        "Duree": vals,
-                        "MH": vals,
-                        "Description": vals
+                        "Equipment": vals[0] if len(vals) > 0 else "N/A",
+                        "Duree": vals[1] if len(vals) > 1 else "N/A",
+                        "MH": vals[2] if len(vals) > 2 else "N/A",
+                        "Description": vals[3] if len(vals) > 3 else "N/A"
                     }
+                    
                     append_to_gsheet(new_entry)
                     st.success("✅ Saved to Google Sheet!")
                     st.balloons()
                 except Exception as e:
-                    st.error(f"Error: {e}. Ensure OpenAI balance is above $0.")
+                    st.error(f"Error: {e}. Check your OpenAI balance.")
 
 # --- TAB 5: ADMIN PANEL ---
 with tab5:
-    st.header("🔐 JESA Admin Management")
-    admin_pwd = st.text_input("Enter Password", type="password")
+    st.header("🔐 Admin Access")
+    pwd = st.text_input("Enter Password", type="password")
     
-    if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+    if pwd == st.secrets["ADMIN_PASSWORD"]:
         master_df = conn.read(ttl="5s")
         if not master_df.empty:
-            st.subheader("Team Records")
-            selected_date = st.selectbox("Download report for:", master_df["Date"].unique())
-            day_data = master_df[master_df["Date"] == selected_date]
+            st.subheader("Team Submissions")
+            available_days = master_df["Date"].unique()
+            selected_day = st.selectbox("Select day to download:", available_days)
+            
+            day_data = master_df[master_df["Date"] == selected_day]
             st.dataframe(day_data, use_container_width=True)
             
             ex_out = io.BytesIO()
             day_data.to_excel(ex_out, index=False)
-            st.download_button(label=f"📥 Download Excel for {selected_date}", data=ex_out.getvalue(), file_name=f"JESA_Report_{selected_date}.xlsx")
+            st.download_button(
+                label=f"📥 Download Excel for {selected_day}",
+                data=ex_out.getvalue(),
+                file_name=f"JESA_Shift_Report_{selected_day}.xlsx"
+            )
         else:
-            st.write("Database is empty.")
-    elif admin_pwd != "":
+            st.write("The database is currently empty.")
+    elif pwd != "":
         st.error("Incorrect Password.")
