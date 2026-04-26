@@ -7,23 +7,30 @@ from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
 # --- 1. PAGE CONFIG & LOGO ---
-st.set_page_config(page_title="JESA - Resource Portal", page_icon="🏗️", layout="wide")
+st.set_page_config(
+    page_title="JESA - Resource Portal", 
+    page_icon="🏗️", 
+    layout="wide"
+)
 
-# Display JESA Logo (Sidebar or Top)
-st.logo("https://brandfetch.com")
+# Using the stable JESA official website logo link
+jesa_logo = "https://jesagroup.com"
+st.logo(jesa_logo)
+
 st.title("🏗️ Resource Leveling & Smoothing Portal")
 
 # --- 2. INITIALIZE CONNECTIONS ---
 try:
+    # This automatically pulls from your Streamlit Secrets
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error(f"Configuration Error: Please check your Streamlit Secrets. Error: {e}")
+    st.error(f"Configuration Error: Check your Secrets. Error: {e}")
     client = None
 
 # --- 3. HELPER FUNCTIONS ---
 
-# Your Original Excel Styling Function
+# Your Original Excel Styling
 def write_styled_excel(df, buffer):
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Schedule')
@@ -35,7 +42,7 @@ def write_styled_excel(df, buffer):
                 if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
-# Google Sheets Update Function
+# Google Sheets Persistence
 def append_to_gsheet(new_data_row):
     existing_data = conn.read(ttl=0) 
     updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
@@ -50,7 +57,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🔐 Admin Panel"
 ])
 
-# --- TAB 1: RESOURCE SMOOTHING (Your Original Code) ---
+# --- TAB 1: RESOURCE SMOOTHING ---
 with tab1:
     st.info("💡 **Required Columns:** `Equipment`, `OT`, `duree`, `MH`")
     uploaded_file1 = st.file_uploader("Upload WMS File", type=['xlsx'], key="file1")
@@ -87,7 +94,7 @@ with tab1:
         write_styled_excel(df, buffer)
         st.download_button("Download Schedule", buffer, "Smooth_Schedule.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 2: DAILY LEVELING (Your Original Code) ---
+# --- TAB 2: DAILY LEVELING ---
 with tab2:
     st.info("💡 **Required Columns:** `OT`, `Equipment`, `duree`, `MH`, `Section`")
     uploaded_file2 = st.file_uploader("Upload Daily Schedule File", type=['xlsx'], key="file2")
@@ -111,7 +118,7 @@ with tab2:
         write_styled_excel(df, buffer)
         st.download_button("Download Leveling", buffer, "Daily_Leveling.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 3: PROTOCOL SHUTDOWN (Your Original Code) ---
+# --- TAB 3: PROTOCOL SHUTDOWN ---
 with tab3:
     st.header("⚙️ Protocol Shutdown Planning")
     uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
@@ -152,22 +159,20 @@ with tab3:
             write_styled_excel(df, buffer)
             st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 4: SHEET REPORT (Voice Entry for JESA Team) ---
+# --- TAB 4: SHEET REPORT (Voice Entries) ---
 with tab4:
-    st.header("🎙️ Voice Entry Report")
-    st.info("Instructions: Speak clearly. Mention Equipment, Duration, MH, and Description.")
-    audio_data = st.audio_input("Record your entry", key="voice_recorder")
+    st.header("🎙️ Voice Entry Sheet Report")
+    st.info("Record report entries. Speak clearly: Equipment, Duration, MH, and Description.")
+    audio_data = st.audio_input("Record your entry", key="voice_rec")
 
     if audio_data and client:
         if st.button("Submit to Database"):
-            with st.spinner("Analyzing Voice..."):
+            with st.spinner("Processing voice..."):
                 try:
-                    # Whisper Transcription
                     transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_data)
                     st.write(f"**Recognized:** {transcript.text}")
 
-                    # GPT Data Structuring
-                    prompt = f"Extract into format Val1|Val2|Val3|Val4: Equipment, Duree, MH, Description from: {transcript.text}"
+                    prompt = f"Extract format Val1|Val2|Val3|Val4: Equipment, Duree, MH, Description from: {transcript.text}"
                     response = client.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[{"role": "user", "content": prompt}]
@@ -175,8 +180,7 @@ with tab4:
                     
                     vals = [v.strip() for v in response.choices.message.content.split("|")]
                     
-                    # Prepare row for Google Sheets
-                    new_row = {
+                    new_entry = {
                         "Date": datetime.now().strftime("%Y-%m-%d"),
                         "Equipment": vals[0],
                         "Duree": vals[1],
@@ -184,40 +188,38 @@ with tab4:
                         "Description": vals[3]
                     }
                     
-                    append_to_gsheet(new_row)
-                    st.success("✅ Data saved to Master Sheet!")
+                    append_to_gsheet(new_entry)
+                    st.success("✅ Saved to Google Sheet!")
                     st.balloons()
                 except Exception as e:
-                    st.error(f"Error: {e}. Please ensure your OpenAI account has credits.")
+                    st.error(f"Error: {e}. Check OpenAI credits or connectivity.")
 
-# --- TAB 5: ADMIN PANEL (For You) ---
+# --- TAB 5: ADMIN PANEL ---
 with tab5:
-    st.header("🔐 JESA Admin Control")
-    admin_pwd = st.text_input("Enter Admin Password", type="password")
+    st.header("🔐 JESA Admin Panel")
+    pwd = st.text_input("Enter Admin Password", type="password")
     
-    if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
-        # Load data from Google Sheets
-        df_master = conn.read(ttl="5s")
+    if pwd == st.secrets["ADMIN_PASSWORD"]:
+        # Pull fresh data
+        master_df = conn.read(ttl="5s")
         
-        if not df_master.empty:
-            st.subheader("Database Overview")
+        if not master_df.empty:
+            st.subheader("All Team Records")
+            unique_days = master_df["Date"].unique()
+            target_day = st.selectbox("Select date to view/export:", unique_days)
             
-            # Filter and Download logic
-            days = df_master["Date"].unique()
-            selected_day = st.selectbox("Select report date to download:", days)
+            day_data = master_df[master_df["Date"] == target_day]
+            st.dataframe(day_data, use_container_width=True)
             
-            daily_df = df_master[df_master["Date"] == selected_day]
-            st.dataframe(daily_df, use_container_width=True)
-            
-            excel_out = io.BytesIO()
-            daily_df.to_excel(excel_out, index=False)
+            ex_out = io.BytesIO()
+            day_data.to_excel(ex_out, index=False)
             st.download_button(
-                label=f"📥 Download Excel for {selected_day}",
-                data=excel_out.getvalue(),
-                file_name=f"JESA_Report_{selected_day}.xlsx",
+                label=f"📥 Download Excel for {target_day}",
+                data=ex_out.getvalue(),
+                file_name=f"JESA_Report_{target_day}.xlsx",
                 mime="application/vnd.ms-excel"
             )
         else:
-            st.write("No reports found in the Google Sheet.")
-    elif admin_pwd != "":
-        st.error("Access Denied.")
+            st.write("No entries found yet.")
+    elif pwd != "":
+        st.error("Incorrect Admin Password.")
