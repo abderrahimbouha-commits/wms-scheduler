@@ -8,7 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(
-    page_title="JESA - Resource Portal", 
+    page_title="JESA - Work Management Portal", 
     page_icon="🏗️", 
     layout="wide"
 )
@@ -37,7 +37,8 @@ def check_password():
 # If password is correct, show the rest of the app
 if check_password():
     
-    st.title("🏗️ Resource Leveling & Smoothing Portal")
+    # --- UPDATED TITLE HERE ---
+    st.title("🏗️ Work Management Portal")
 
     # --- 3. INITIALIZE CONNECTIONS ---
     try:
@@ -198,10 +199,10 @@ if check_password():
                         
                         new_entry = {
                             "Date": datetime.now().strftime("%Y-%m-%d"),
-                            "Equipment": vals[0] if len(vals) > 0 else "N/A",
-                            "Duree": vals[1] if len(vals) > 1 else "N/A",
-                            "MH": vals[2] if len(vals) > 2 else "N/A",
-                            "Description": vals[3] if len(vals) > 3 else "N/A"
+                            "Equipment": vals if len(vals) > 0 else "N/A",
+                            "Duree": vals if len(vals) > 1 else "N/A",
+                            "MH": vals if len(vals) > 2 else "N/A",
+                            "Description": vals if len(vals) > 3 else "N/A"
                         }
                         
                         append_to_gsheet(new_entry)
