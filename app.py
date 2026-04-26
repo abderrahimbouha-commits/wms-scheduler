@@ -13,15 +13,21 @@ st.set_page_config(
     layout="wide"
 )
 
-# Using the stable JESA official website logo link
-jesa_logo = "https://jesagroup.com"
+# Using a high-quality direct link for the JESA logo
+jesa_logo = "https://vector.ma"
+
+# Display JESA Logo in the Sidebar
 st.logo(jesa_logo)
 
-st.title("🏗️ Resource Leveling & Smoothing Portal")
+# Display JESA Logo on the Front Page header
+col1, col2 = st.columns([1, 10])
+with col1:
+    st.image(jesa_logo, width=100)
+with col2:
+    st.title("Resource Leveling & Smoothing Portal")
 
 # --- 2. INITIALIZE CONNECTIONS ---
 try:
-    # This automatically pulls from your Streamlit Secrets
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
@@ -29,8 +35,6 @@ except Exception as e:
     client = None
 
 # --- 3. HELPER FUNCTIONS ---
-
-# Your Original Excel Styling
 def write_styled_excel(df, buffer):
     with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Schedule')
@@ -42,7 +46,6 @@ def write_styled_excel(df, buffer):
                 if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
-# Google Sheets Persistence
 def append_to_gsheet(new_data_row):
     existing_data = conn.read(ttl=0) 
     updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
@@ -159,11 +162,11 @@ with tab3:
             write_styled_excel(df, buffer)
             st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-# --- TAB 4: SHEET REPORT (Voice Entries) ---
+# --- TAB 4: SHEET REPORT (Voice Entry) ---
 with tab4:
     st.header("🎙️ Voice Entry Sheet Report")
-    st.info("Record report entries. Speak clearly: Equipment, Duration, MH, and Description.")
-    audio_data = st.audio_input("Record your entry", key="voice_rec")
+    st.info("Record entries: Equipment, Duration, MH, and Description.")
+    audio_data = st.audio_input("Record your entry", key="voice_report_jesa")
 
     if audio_data and client:
         if st.button("Submit to Database"):
@@ -179,47 +182,36 @@ with tab4:
                     )
                     
                     vals = [v.strip() for v in response.choices.message.content.split("|")]
-                    
                     new_entry = {
                         "Date": datetime.now().strftime("%Y-%m-%d"),
-                        "Equipment": vals[0],
-                        "Duree": vals[1],
-                        "MH": vals[2],
-                        "Description": vals[3]
+                        "Equipment": vals,
+                        "Duree": vals,
+                        "MH": vals,
+                        "Description": vals
                     }
-                    
                     append_to_gsheet(new_entry)
                     st.success("✅ Saved to Google Sheet!")
                     st.balloons()
                 except Exception as e:
-                    st.error(f"Error: {e}. Check OpenAI credits or connectivity.")
+                    st.error(f"Error: {e}. Ensure OpenAI balance is above $0.")
 
 # --- TAB 5: ADMIN PANEL ---
 with tab5:
-    st.header("🔐 JESA Admin Panel")
-    pwd = st.text_input("Enter Admin Password", type="password")
+    st.header("🔐 JESA Admin Management")
+    admin_pwd = st.text_input("Enter Password", type="password")
     
-    if pwd == st.secrets["ADMIN_PASSWORD"]:
-        # Pull fresh data
+    if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
         master_df = conn.read(ttl="5s")
-        
         if not master_df.empty:
-            st.subheader("All Team Records")
-            unique_days = master_df["Date"].unique()
-            target_day = st.selectbox("Select date to view/export:", unique_days)
-            
-            day_data = master_df[master_df["Date"] == target_day]
+            st.subheader("Team Records")
+            selected_date = st.selectbox("Download report for:", master_df["Date"].unique())
+            day_data = master_df[master_df["Date"] == selected_date]
             st.dataframe(day_data, use_container_width=True)
             
             ex_out = io.BytesIO()
             day_data.to_excel(ex_out, index=False)
-            st.download_button(
-                label=f"📥 Download Excel for {target_day}",
-                data=ex_out.getvalue(),
-                file_name=f"JESA_Report_{target_day}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
+            st.download_button(label=f"📥 Download Excel for {selected_date}", data=ex_out.getvalue(), file_name=f"JESA_Report_{selected_date}.xlsx")
         else:
-            st.write("No entries found yet.")
-    elif pwd != "":
-        st.error("Incorrect Admin Password.")
+            st.write("Database is empty.")
+    elif admin_pwd != "":
+        st.error("Incorrect Password.")
