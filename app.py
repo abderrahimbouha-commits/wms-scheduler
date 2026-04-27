@@ -18,11 +18,10 @@ if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 def check_password():
-    """Returns True if the user had the correct password."""
     def password_entered():
         if st.session_state["password"] == st.secrets["GENERAL_PASSWORD"]:
             st.session_state["authenticated"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password"] 
         else:
             st.session_state["authenticated"] = False
 
@@ -34,10 +33,7 @@ def check_password():
     else:
         return True
 
-# If password is correct, show the rest of the app
 if check_password():
-    
-    # --- UPDATED TITLE HERE ---
     st.title("🏗️ Work Management Portal")
 
     # --- 3. INITIALIZE CONNECTIONS ---
@@ -65,20 +61,16 @@ if check_password():
         updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
         conn.update(data=updated_df)
 
-    # --- 5. TABS DEFINITION ---
+    # --- 5. TABS ---
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Resource Smoothing", 
-        "Daily Leveling", 
-        "Protocol Shutdown", 
-        "🎙️ Shift Report", 
-        "🔐 Admin Panel"
+        "Resource Smoothing", "Daily Leveling", "Protocol Shutdown", "🎙️ Shift Report", "🔐 Admin Panel"
     ])
 
-    # --- TAB 1: RESOURCE SMOOTHING ---
+    # --- TAB 1 ---
     with tab1:
-        st.info("💡 **Required Columns:** `Equipment`, `OT`, `duree`, `MH`")
-        uploaded_file1 = st.file_uploader("Upload WMS File", type=['xlsx'], key="file1")
-        daily_cap = st.number_input("Enter Daily MH Capacity:", value=100.0, key="cap1")
+        st.info("💡 Required: Equipment, OT, duree, MH")
+        uploaded_file1 = st.file_uploader("Upload WMS", type=['xlsx'], key="file1")
+        daily_cap = st.number_input("Daily MH Capacity:", value=100.0, key="cap1")
         if uploaded_file1 and st.button("Generate Smoothing", key="btn1"):
             df = pd.read_excel(uploaded_file1)
             df = df.sort_values(by=['Equipment', 'MH'], ascending=[True, False])
@@ -111,10 +103,9 @@ if check_password():
             write_styled_excel(df, buffer)
             st.download_button("Download Schedule", buffer, "Smooth_Schedule.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 2: DAILY LEVELING ---
+    # --- TAB 2 ---
     with tab2:
-        st.info("💡 **Required Columns:** `OT`, `Equipment`, `duree`, `MH`, `Section`")
-        uploaded_file2 = st.file_uploader("Upload Daily Schedule File", type=['xlsx'], key="file2")
+        uploaded_file2 = st.file_uploader("Upload Daily", type=['xlsx'], key="file2")
         if uploaded_file2 and st.button("Generate Leveling", key="btn2"):
             df = pd.read_excel(uploaded_file2)
             df = df.sort_values(by=['Equipment', 'MH'], ascending=[True, False])
@@ -135,17 +126,16 @@ if check_password():
             write_styled_excel(df, buffer)
             st.download_button("Download Leveling", buffer, "Daily_Leveling.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 3: PROTOCOL SHUTDOWN ---
+    # --- TAB 3 ---
     with tab3:
-        st.header("⚙️ Protocol Shutdown Planning")
-        uploaded_file3 = st.file_uploader("Upload Shutdown File", type=['xlsx'], key="file3")
+        st.header("⚙️ Protocol Shutdown")
+        uploaded_file3 = st.file_uploader("Upload Shutdown", type=['xlsx'], key="file3")
         if uploaded_file3:
             df = pd.read_excel(uploaded_file3)
-            st.subheader("Define Daily MH Capacity")
             col1, col2, col3 = st.columns(3)
-            mh_caout = col1.number_input("Caoutchoutage MH", min_value=0.0, value=50.0)
-            mh_elec = col2.number_input("Electrique MH", min_value=0.0, value=50.0)
-            mh_mech = col3.number_input("Mecanique MH", min_value=0.0, value=50.0)
+            mh_caout = col1.number_input("Caoutchoutage MH", value=50.0)
+            mh_elec = col2.number_input("Electrique MH", value=50.0)
+            mh_mech = col3.number_input("Mecanique MH", value=50.0)
             if st.button("Generate Gantt"):
                 caps = {'Caoutchoutage': mh_caout/8.0, 'Electrique': mh_elec/8.0, 'Mecanique': mh_mech/8.0}
                 for h in range(9, 17): df[f"{h:02d}:00"] = ""
@@ -176,64 +166,47 @@ if check_password():
                 write_styled_excel(df, buffer)
                 st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 4: SHIFT REPORT ---
+    # --- TAB 4 (CORRECTED) ---
     with tab4:
         st.header("🎙️ Voice Entry Shift Report")
-        st.info("Speak clearly: Equipment, Duration, MH, and Description.")
-        audio_data = st.audio_input("Record your report", key="shift_voice_rec")
-
+        audio_data = st.audio_input("Record report", key="shift_voice_rec")
         if audio_data and client:
             if st.button("Submit to Database"):
-                with st.spinner("Processing voice..."):
+                with st.spinner("Processing..."):
                     try:
                         transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_data)
                         st.write(f"**Recognized:** {transcript.text}")
-
-                        prompt = f"Extract format Val1|Val2|Val3|Val4: Equipment, Duree, MH, Description from: {transcript.text}"
+                        prompt = "Extract these 4 values separated by '|': Equipment, Duree, MH, Description. If missing, use 'N/A'. Text: " + transcript.text
                         response = client.chat.completions.create(
                             model="gpt-3.5-turbo",
                             messages=[{"role": "user", "content": prompt}]
                         )
-                        
-                        vals = [v.strip() for v in response.choices.message.content.split("|")]
+                        # --- FIX APPLIED HERE ---
+                        content = response.choices[0].message.content
+                        vals = [v.strip() for v in content.split("|")]
                         
                         new_entry = {
                             "Date": datetime.now().strftime("%Y-%m-%d"),
-                            "Equipment": vals if len(vals) > 0 else "N/A",
-                            "Duree": vals if len(vals) > 1 else "N/A",
-                            "MH": vals if len(vals) > 2 else "N/A",
-                            "Description": vals if len(vals) > 3 else "N/A"
+                            "Equipment": vals[0] if len(vals) > 0 else "N/A",
+                            "Duree": vals[1] if len(vals) > 1 else "N/A",
+                            "MH": vals[2] if len(vals) > 2 else "N/A",
+                            "Description": vals[3] if len(vals) > 3 else "N/A"
                         }
-                        
                         append_to_gsheet(new_entry)
-                        st.success("✅ Saved to Google Sheet!")
-                        st.balloons()
+                        st.success("✅ Saved!")
                     except Exception as e:
-                        st.error(f"Error: {e}. Check your OpenAI balance.")
+                        st.error(f"Error: {e}")
 
-    # --- TAB 5: ADMIN PANEL ---
+    # --- TAB 5 ---
     with tab5:
         st.header("🔐 Admin Access")
-        admin_pwd = st.text_input("Enter Admin Panel Password", type="password", key="admin_pwd_field")
-        
+        admin_pwd = st.text_input("Admin Password", type="password", key="admin_pwd_field")
         if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
             master_df = conn.read(ttl="5s")
             if not master_df.empty:
-                st.subheader("Team Submissions")
-                available_days = master_df["Date"].unique()
-                selected_day = st.selectbox("Select day to download:", available_days)
-                
+                selected_day = st.selectbox("Select day:", master_df["Date"].unique())
                 day_data = master_df[master_df["Date"] == selected_day]
-                st.dataframe(day_data, use_container_width=True)
-                
+                st.dataframe(day_data)
                 ex_out = io.BytesIO()
                 day_data.to_excel(ex_out, index=False)
-                st.download_button(
-                    label=f"📥 Download Excel for {selected_day}",
-                    data=ex_out.getvalue(),
-                    file_name=f"JESA_Shift_Report_{selected_day}.xlsx"
-                )
-            else:
-                st.write("The database is currently empty.")
-        elif admin_pwd != "":
-            st.error("Incorrect Password.")
+                st.download_button("📥 Download Excel", data=ex_out.getvalue(), file_name="Report.xlsx")
