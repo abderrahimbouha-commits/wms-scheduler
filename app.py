@@ -44,7 +44,7 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def parse_coords(coord_str):
     try:
-        lat, lon = map(float, coord_str.split(','))
+        lat, lon = map(float, str(coord_str).replace('"', '').split(','))
         return lat, lon
     except:
         return None, None
@@ -57,7 +57,7 @@ def write_styled_excel(df, buffer):
         format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
         for row_num in range(1, len(df) + 1):
             for col_num, col_name in enumerate(df.columns):
-                if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
+                if ":00" in str(col_name) and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
 def append_to_gsheet(conn, new_data_row):
@@ -84,7 +84,7 @@ if check_password():
     ])
     tab1, tab2, tab3, tab4, tab5, tab6 = tabs
 
-    # --- TAB 1 ---
+    # --- TAB 1: Smoothing ---
     with tab1:
         st.info("💡 Required: Equipment, OT, duree, MH")
         uploaded_file1 = st.file_uploader("Upload WMS", type=['xlsx'], key="file1")
@@ -121,7 +121,7 @@ if check_password():
             write_styled_excel(df, buffer)
             st.download_button("Download Schedule", buffer, "Smooth_Schedule.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 2 ---
+    # --- TAB 2: Leveling ---
     with tab2:
         uploaded_file2 = st.file_uploader("Upload Daily", type=['xlsx'], key="file2")
         if uploaded_file2 and st.button("Generate Leveling", key="btn2"):
@@ -144,7 +144,7 @@ if check_password():
             write_styled_excel(df, buffer)
             st.download_button("Download Leveling", buffer, "Daily_Leveling.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 3 ---
+    # --- TAB 3: Shutdown ---
     with tab3:
         st.header("⚙️ Protocol Shutdown")
         uploaded_file3 = st.file_uploader("Upload Shutdown", type=['xlsx'], key="file3")
@@ -189,7 +189,8 @@ if check_password():
         st.header("🚜 Conveyor Inspection Planner")
         @st.cache_data
         def load_inspection_data():
-            df = pd.read_csv("Convoyeur.csv")
+            # skiprows=2 is critical to skip the blank rows in your CSV
+            df = pd.read_csv("Convoyeur.csv", skiprows=2)
             df.columns = df.columns.str.strip()
             df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
             df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
@@ -223,7 +224,7 @@ if check_password():
         except Exception as e:
             st.warning("Inspection data not loaded (Ensure 'Convoyeur.csv' exists).")
 
-    # --- TAB 5 ---
+    # --- TAB 5: Shift Report ---
     with tab5:
         st.header("🎙️ Voice Entry Shift Report")
         audio_data = st.audio_input("Record report", key="shift_voice_rec")
@@ -248,7 +249,7 @@ if check_password():
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # --- TAB 6 ---
+    # --- TAB 6: Admin ---
     with tab6:
         st.header("🔐 Admin Access")
         admin_pwd = st.text_input("Admin Password", type="password", key="admin_pwd_field")
