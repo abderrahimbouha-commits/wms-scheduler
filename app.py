@@ -188,52 +188,52 @@ if check_password():
     # --- TAB 4: INSPECTION PLANNER ---
     with tab4:
         st.header("🚜 Conveyor Inspection Planner")
-        @st.cache_data
-        def load_inspection_data():
-            # Skip 2 header rows, read CSV
-            df = pd.read_csv("Convoyeur.csv", header=2)
-            # The CSV starts with a comma (,), which creates an empty column 0.
-            # We drop column 0 so column 1 becomes column 0 (which is 'Equipment')
-            df = df.iloc[:, 1:]
-            
-            # Clean up whitespace in headers
-            df.columns = df.columns.astype(str).str.strip()
-            
-            # Remove any trailing empty rows
-            df = df.dropna(subset=['Equipment'])
-            
-            df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
-            df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
-            df['length_m'] = df.apply(lambda row: haversine(row['lat_start'], row['lon_start'], row['lat_end'], row['lon_end']), axis=1)
-            return df
-
-        try:
-            df_insp = load_inspection_data()
-            selected_equip = st.multiselect("Select Conveyors", df_insp['Equipment'].unique())
-
-            if selected_equip:
-                subset = df_insp[df_insp['Equipment'].isin(selected_equip)].copy()
-                route = [subset.iloc[0]]
-                remaining = subset.iloc[1:].copy()
-                while not remaining.empty:
-                    last = route[-1]
-                    distances = remaining.apply(lambda x: haversine(last['lat_end'], last['lon_end'], x['lat_start'], x['lon_start']), axis=1)
-                    next_idx = distances.idxmin()
-                    route.append(remaining.loc[next_idx])
-                    remaining.drop(next_idx, inplace=True)
-                route_df = pd.DataFrame(route)
+        # Added a File Uploader here
+        inspection_file = st.file_uploader("Upload Inspection CSV", type=['csv'])
+        
+        if inspection_file:
+            def load_inspection_data(uploaded_file):
+                # Skip 2 header rows, read CSV
+                df = pd.read_csv(uploaded_file, header=2)
+                # Drop column 0 (which is empty) so column 1 becomes column 0 (Equipment)
+                df = df.iloc[:, 1:]
+                # Clean up whitespace
+                df.columns = df.columns.astype(str).str.strip()
+                df = df.dropna(subset=['Equipment'])
                 
-                fig = px.line_mapbox(
-                    route_df, lat="lat_start", lon="lon_start", 
-                    hover_name="Equipment", zoom=16,
-                    center={"lat": route_df['lat_start'].mean(), "lon": route_df['lon_start'].mean()}
-                )
-                fig.update_layout(mapbox_style="open-street-map")
-                st.plotly_chart(fig, use_container_width=True)
-                st.write(f"**Total Path Length:** {route_df['length_m'].sum():.2f} meters")
-        except Exception as e:
-            st.error(f"Data Loading Error: {e}")
-            st.info("Check your CSV file format. It must contain 'Equipment', 'Addresse Queue', and 'Addresse TM' columns.")
+                df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
+                df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
+                df['length_m'] = df.apply(lambda row: haversine(row['lat_start'], row['lon_start'], row['lat_end'], row['lon_end']), axis=1)
+                return df
+
+            try:
+                df_insp = load_inspection_data(inspection_file)
+                selected_equip = st.multiselect("Select Conveyors", df_insp['Equipment'].unique())
+
+                if selected_equip:
+                    subset = df_insp[df_insp['Equipment'].isin(selected_equip)].copy()
+                    route = [subset.iloc[0]]
+                    remaining = subset.iloc[1:].copy()
+                    while not remaining.empty:
+                        last = route[-1]
+                        distances = remaining.apply(lambda x: haversine(last['lat_end'], last['lon_end'], x['lat_start'], x['lon_start']), axis=1)
+                        next_idx = distances.idxmin()
+                        route.append(remaining.loc[next_idx])
+                        remaining.drop(next_idx, inplace=True)
+                    route_df = pd.DataFrame(route)
+                    
+                    fig = px.line_mapbox(
+                        route_df, lat="lat_start", lon="lon_start", 
+                        hover_name="Equipment", zoom=16,
+                        center={"lat": route_df['lat_start'].mean(), "lon": route_df['lon_start'].mean()}
+                    )
+                    fig.update_layout(mapbox_style="open-street-map")
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.write(f"**Total Path Length:** {route_df['length_m'].sum():.2f} meters")
+            except Exception as e:
+                st.error(f"Data Processing Error: {e}")
+        else:
+            st.info("Please upload your 'Convoyeur.csv' file above to start.")
 
     # --- TAB 5 ---
     with tab5:
