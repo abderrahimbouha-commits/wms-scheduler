@@ -5,3 +5,4 @@ xlsxwriter
 openpyxl
 openai
 st-gsheets-connection
+plotly
