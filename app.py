@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import plotly.express as px
+from math import radians, cos, sin, asin, sqrt
 from openai import OpenAI
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
@@ -33,38 +35,54 @@ def check_password():
     else:
         return True
 
+# --- 3. HELPER FUNCTIONS ---
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6372800  
+    dLat, dLon = radians(lat2 - lat1), radians(lon2 - lon1)
+    a = sin(dLat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dLon/2)**2
+    return R * 2 * asin(sqrt(a))
+
+def parse_coords(coord_str):
+    try:
+        lat, lon = map(float, coord_str.split(','))
+        return lat, lon
+    except:
+        return None, None
+
+def write_styled_excel(df, buffer):
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Schedule')
+        workbook = writer.book
+        worksheet = writer.sheets['Schedule']
+        format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
+        for row_num in range(1, len(df) + 1):
+            for col_num, col_name in enumerate(df.columns):
+                if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
+                    worksheet.write(row_num, col_num, "X", format_busy)
+
+def append_to_gsheet(conn, new_data_row):
+    existing_data = conn.read(ttl=0) 
+    updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
+    conn.update(data=updated_df)
+
+# --- 4. MAIN APP ---
 if check_password():
     st.title("🏗️ Work Management Portal")
 
-    # --- 3. INITIALIZE CONNECTIONS ---
+    # --- INITIALIZE CONNECTIONS ---
     try:
         client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         conn = st.connection("gsheets", type=GSheetsConnection)
     except Exception as e:
-        st.error(f"Configuration Error: Check your Secrets. Error: {e}")
+        st.error(f"Configuration Error: {e}")
         client = None
 
-    # --- 4. HELPER FUNCTIONS ---
-    def write_styled_excel(df, buffer):
-        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-            df.to_excel(writer, index=False, sheet_name='Schedule')
-            workbook = writer.book
-            worksheet = writer.sheets['Schedule']
-            format_busy = workbook.add_format({'bg_color': '#4CAF50', 'font_color': '#ffffff'})
-            for row_num in range(1, len(df) + 1):
-                for col_num, col_name in enumerate(df.columns):
-                    if ":00" in col_name and str(df.iloc[row_num-1, col_num]).upper() == "X":
-                        worksheet.write(row_num, col_num, "X", format_busy)
-
-    def append_to_gsheet(new_data_row):
-        existing_data = conn.read(ttl=0) 
-        updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
-        conn.update(data=updated_df)
-
-    # --- 5. TABS ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Resource Smoothing", "Daily Leveling", "Protocol Shutdown", "🎙️ Shift Report", "🔐 Admin Panel"
+    # --- TABS ---
+    tabs = st.tabs([
+        "Resource Smoothing", "Daily Leveling", "Protocol Shutdown", 
+        "Inspection Planner", "🎙️ Shift Report", "🔐 Admin Panel"
     ])
+    tab1, tab2, tab3, tab4, tab5, tab6 = tabs
 
     # --- TAB 1 ---
     with tab1:
@@ -166,8 +184,47 @@ if check_password():
                 write_styled_excel(df, buffer)
                 st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 4 (CORRECTED) ---
+    # --- TAB 4: INSPECTION PLANNER ---
     with tab4:
+        st.header("🚜 Conveyor Inspection Planner")
+        @st.cache_data
+        def load_inspection_data():
+            df = pd.read_csv("Convoyeur.csv")
+            df.columns = df.columns.str.strip()
+            df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
+            df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
+            df['length_m'] = df.apply(lambda row: haversine(row['lat_start'], row['lon_start'], row['lat_end'], row['lon_end']), axis=1)
+            return df
+
+        try:
+            df_insp = load_inspection_data()
+            selected_equip = st.multiselect("Select Conveyors", df_insp['Equipment'].unique())
+
+            if selected_equip:
+                subset = df_insp[df_insp['Equipment'].isin(selected_equip)].copy()
+                route = [subset.iloc[0]]
+                remaining = subset.iloc[1:].copy()
+                while not remaining.empty:
+                    last = route[-1]
+                    distances = remaining.apply(lambda x: haversine(last['lat_end'], last['lon_end'], x['lat_start'], x['lon_start']), axis=1)
+                    next_idx = distances.idxmin()
+                    route.append(remaining.loc[next_idx])
+                    remaining.drop(next_idx, inplace=True)
+                route_df = pd.DataFrame(route)
+                
+                fig = px.line_mapbox(
+                    route_df, lat="lat_start", lon="lon_start", 
+                    hover_name="Equipment", zoom=16,
+                    center={"lat": route_df['lat_start'].mean(), "lon": route_df['lon_start'].mean()}
+                )
+                fig.update_layout(mapbox_style="open-street-map")
+                st.plotly_chart(fig, use_container_width=True)
+                st.write(f"**Total Path Length:** {route_df['length_m'].sum():.2f} meters")
+        except Exception as e:
+            st.warning("Inspection data not loaded (Ensure 'Convoyeur.csv' exists).")
+
+    # --- TAB 5 ---
+    with tab5:
         st.header("🎙️ Voice Entry Shift Report")
         audio_data = st.audio_input("Record report", key="shift_voice_rec")
         if audio_data and client:
@@ -175,16 +232,10 @@ if check_password():
                 with st.spinner("Processing..."):
                     try:
                         transcript = client.audio.transcriptions.create(model="whisper-1", file=audio_data)
-                        st.write(f"**Recognized:** {transcript.text}")
                         prompt = "Extract these 4 values separated by '|': Equipment, Duree, MH, Description. If missing, use 'N/A'. Text: " + transcript.text
-                        response = client.chat.completions.create(
-                            model="gpt-3.5-turbo",
-                            messages=[{"role": "user", "content": prompt}]
-                        )
-                        # --- FIX APPLIED HERE ---
+                        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
                         content = response.choices[0].message.content
                         vals = [v.strip() for v in content.split("|")]
-                        
                         new_entry = {
                             "Date": datetime.now().strftime("%Y-%m-%d"),
                             "Equipment": vals[0] if len(vals) > 0 else "N/A",
@@ -192,13 +243,13 @@ if check_password():
                             "MH": vals[2] if len(vals) > 2 else "N/A",
                             "Description": vals[3] if len(vals) > 3 else "N/A"
                         }
-                        append_to_gsheet(new_entry)
+                        append_to_gsheet(conn, new_entry)
                         st.success("✅ Saved!")
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # --- TAB 5 ---
-    with tab5:
+    # --- TAB 6 ---
+    with tab6:
         st.header("🔐 Admin Access")
         admin_pwd = st.text_input("Admin Password", type="password", key="admin_pwd_field")
         if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
