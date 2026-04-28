@@ -62,7 +62,6 @@ if check_password():
                 # Parse Coords
                 df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
                 df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
-                df['conv_len'] = df.apply(lambda row: haversine(row['lat_start'], row['lon_start'], row['lat_end'], row['lon_end']), axis=1)
                 
                 selected = st.multiselect("Select Conveyors to Inspect:", df['Equipment'].unique())
                 
@@ -70,21 +69,17 @@ if check_password():
                     subset = df[df['Equipment'].isin(selected)].copy()
                     
                     # GLOBAL OPTIMIZATION
-                    # Try all orders of conveyors AND all entry/exit directions
                     best_dist = float('inf')
                     best_route = None
                     
                     for p in permutations(subset.index):
-                        # Directions: 0 = Queue->TM, 1 = TM->Queue
                         for directions in product([0, 1], repeat=len(p)):
                             curr_lat, curr_lon = BASE_LAT, BASE_LON
                             total_walk = 0
                             current_route = []
                             
-                            valid_path = True
                             for i, idx in enumerate(p):
                                 row = subset.loc[idx].copy()
-                                # Decide orientation
                                 if directions[i] == 0: # Entry at Queue
                                     entry_lat, entry_lon = row['lat_start'], row['lon_start']
                                     exit_lat, exit_lon = row['lat_end'], row['lon_end']
@@ -122,13 +117,15 @@ if check_password():
                     fig.add_trace(go.Scatter(x=w_lons, y=w_lats, mode='lines', 
                                              line=dict(color='green', width=3, dash='dash'), name='Optimal Walking Path'))
                     
-                    fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
+                    fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=False, zeroline=False), yaxis=dict(showgrid=False, zeroline=False))
                     st.plotly_chart(fig, use_container_width=True)
-                    
-                    total_conv_len = sum([step['row']['conv_len'] for step in best_route])
-                    st.write(f"### Metrics")
-                    st.write(f"- 🟦 **Total Conveyor Length:** {total_conv_len:.0f} meters")
-                    st.write(f"- 🟩 **Total Walking Distance:** {best_dist:.0f} meters")
             
             except Exception as e:
                 st.error(f"Error optimizing path: {e}")
+
+    # Tabs 0, 1, 2, 4, 5
+    with tabs[0]: st.subheader("Smoothing")
+    with tabs[1]: st.subheader("Leveling")
+    with tabs[2]: st.subheader("Shutdown")
+    with tabs[4]: st.subheader("Shift Report")
+    with tabs[5]: st.subheader("Admin")
