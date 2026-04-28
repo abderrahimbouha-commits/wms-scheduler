@@ -11,7 +11,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JESA - Work Management Portal", page_icon="🏗️", layout="wide")
 
-# --- 2. AUTHENTICATION ---
+# --- 2. GLOBAL PASSWORD PROTECTION ---
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
 
 def check_password():
@@ -34,6 +34,7 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def parse_coords(coord_str):
     try:
+        # Removes quotes and cleans string
         clean_str = str(coord_str).replace('"', '').replace("'", "")
         lat, lon = map(float, clean_str.split(','))
         return lat, lon
@@ -60,32 +61,32 @@ if check_password():
 
     # --- TAB 1: Smoothing ---
     with tabs[0]:
-        st.info("💡 Required: Equipment, OT, duree, MH")
-        file = st.file_uploader("Upload WMS", type=['xlsx'], key="f1")
-        if file and st.button("Generate Smoothing", key="b1"):
-            st.success("Smoothing Logic Active")
+        uploaded = st.file_uploader("Upload WMS", type=['xlsx'], key="f1")
+        if uploaded and st.button("Generate Smoothing", key="b1"):
+            st.success("Logic active")
 
     # --- TAB 2: Leveling ---
     with tabs[1]:
-        file = st.file_uploader("Upload Daily", type=['xlsx'], key="f2")
+        uploaded = st.file_uploader("Upload Daily", type=['xlsx'], key="f2")
 
     # --- TAB 3: Shutdown ---
     with tabs[2]:
-        file = st.file_uploader("Upload Shutdown", type=['xlsx'], key="f3")
+        uploaded = st.file_uploader("Upload Shutdown", type=['xlsx'], key="f3")
 
-    # --- TAB 4: INSPECTION PLANNER (Schematic Draft) ---
+    # --- TAB 4: INSPECTION PLANNER (EXCEL VERSION) ---
     with tabs[3]:
         st.header("🚜 Conveyor Inspection Planner")
-        inspection_file = st.file_uploader("Upload Inspection CSV", type=['csv'])
+        excel_file = st.file_uploader("Upload Inspection Excel (.xlsx)", type=['xlsx'])
         
-        if inspection_file:
+        if excel_file:
             try:
-                # Load: Skip 2 header rows, drop first empty column, clean headers
-                df = pd.read_csv(inspection_file, header=2)
-                df = df.iloc[:, 1:] 
+                # Read Excel
+                df = pd.read_excel(excel_file)
+                # Ensure column names have no whitespace
                 df.columns = df.columns.astype(str).str.strip()
                 df = df.dropna(subset=['Equipment'])
                 
+                # Coordinate Parsing
                 df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
                 df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
                 df['length_m'] = df.apply(lambda row: haversine(row['lat_start'], row['lon_start'], row['lat_end'], row['lon_end']), axis=1)
@@ -94,6 +95,8 @@ if check_password():
                 
                 if selected:
                     subset = df[df['Equipment'].isin(selected)].copy()
+                    
+                    # Pathfinding
                     route = [subset.iloc[0]]
                     remaining = subset.iloc[1:].copy()
                     while not remaining.empty:
@@ -104,16 +107,19 @@ if check_password():
                         remaining.drop(idx, inplace=True)
                     route_df = pd.DataFrame(route)
 
-                    # SCHEMATIC DRAFT
+                    # Schematic Drawing
                     fig = go.Figure()
                     for _, row in route_df.iterrows():
-                        fig.add_trace(go.Scatter(x=[row['lon_start'], row['lon_end']], y=[row['lat_start'], row['lat_end']], 
-                                                 mode='lines+markers', name=row['Equipment'], line=dict(color='royalblue', width=6)))
+                        fig.add_trace(go.Scatter(x=[row['lon_start'], row['lon_end']], 
+                                                 y=[row['lat_start'], row['lat_end']], 
+                                                 mode='lines+markers', name=row['Equipment'], 
+                                                 line=dict(color='royalblue', width=6)))
                     
+                    fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
                     st.plotly_chart(fig, use_container_width=True)
                     st.write(f"**Total Path Length:** {route_df['length_m'].sum():.2f} meters")
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error(f"Error reading Excel: {e}")
 
     # --- TAB 5: Shift Report ---
     with tabs[4]:
