@@ -4,12 +4,13 @@ import numpy as np
 import io
 import plotly.graph_objects as go
 from math import radians, cos, sin, asin, sqrt
+from itertools import permutations, product
 from openai import OpenAI
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
-# --- 1. CONFIG ---
-st.set_page_config(page_title="JESA - Work Management Portal", page_icon="🏗️", layout="wide")
+# --- 1. PAGE CONFIG ---
+st.set_page_config(page_title="JESA - Inspection Portal", page_icon="🏗️", layout="wide")
 
 # --- 2. AUTHENTICATION ---
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
@@ -41,18 +42,14 @@ def parse_coords(coord_str):
         return lat, lon
     except: return None, None
 
-# --- 4. MAIN APPLICATION ---
+# --- 4. MAIN APP ---
 if check_password():
     st.title("🏗️ Work Management Portal")
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    
     tabs = st.tabs(["Smoothing", "Leveling", "Shutdown", "Inspection Planner", "Shift Report", "Admin"])
 
-    # --- TAB 4: INSPECTION PLANNER (Optimized Bidirectional) ---
     with tabs[3]:
-        st.header("🚜 Conveyor Inspection Planner")
-        st.write(f"📍 Start: **La Base de Vie JESA**")
+        st.header("🚜 Optimized Inspection Planner")
+        st.write(f"📍 Start Point: **La Base de Vie JESA**")
         
         excel_file = st.file_uploader("Upload Inspection Excel (.xlsx)", type=['xlsx'])
         
@@ -62,6 +59,7 @@ if check_password():
                 df.columns = df.columns.astype(str).str.strip()
                 df = df.dropna(subset=['Equipment'])
                 
+                # Parse Coords
                 df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
                 df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
                 df['conv_len'] = df.apply(lambda row: haversine(row['lat_start'], row['lon_start'], row['lat_end'], row['lon_end']), axis=1)
@@ -71,70 +69,66 @@ if check_password():
                 if selected:
                     subset = df[df['Equipment'].isin(selected)].copy()
                     
-                    cur_lat, cur_lon = BASE_LAT, BASE_LON
-                    route = []
-                    walking_dist = 0
+                    # GLOBAL OPTIMIZATION
+                    # Try all orders of conveyors AND all entry/exit directions
+                    best_dist = float('inf')
+                    best_route = None
                     
-                    # Optimized Greedy Pathfinding
-                    while not subset.empty:
-                        # Find nearest end for every remaining conveyor
-                        def get_best_entry(row):
-                            d_queue = haversine(cur_lat, cur_lon, row['lat_start'], row['lon_start'])
-                            d_tm = haversine(cur_lat, cur_lon, row['lat_end'], row['lon_end'])
-                            if d_queue < d_tm: return d_queue, 'Queue'
-                            else: return d_tm, 'TM'
-                        
-                        subset['dist_info'] = subset.apply(get_best_entry, axis=1)
-                        subset[['dist', 'entry_point']] = pd.DataFrame(subset['dist_info'].tolist(), index=subset.index)
-                        
-                        best_idx = subset['dist'].idxmin()
-                        best_row = subset.loc[best_idx]
-                        
-                        walking_dist += best_row['dist']
-                        route.append(best_row)
-                        
-                        # Update current pos to the exit of the conveyor just finished
-                        if best_row['entry_point'] == 'Queue':
-                            cur_lat, cur_lon = best_row['lat_end'], best_row['lon_end']
-                        else:
-                            cur_lat, cur_lon = best_row['lat_start'], best_row['lon_start']
-                        
-                        subset.drop(best_idx, inplace=True)
-                    
+                    for p in permutations(subset.index):
+                        # Directions: 0 = Queue->TM, 1 = TM->Queue
+                        for directions in product([0, 1], repeat=len(p)):
+                            curr_lat, curr_lon = BASE_LAT, BASE_LON
+                            total_walk = 0
+                            current_route = []
+                            
+                            valid_path = True
+                            for i, idx in enumerate(p):
+                                row = subset.loc[idx].copy()
+                                # Decide orientation
+                                if directions[i] == 0: # Entry at Queue
+                                    entry_lat, entry_lon = row['lat_start'], row['lon_start']
+                                    exit_lat, exit_lon = row['lat_end'], row['lon_end']
+                                else: # Entry at TM
+                                    entry_lat, entry_lon = row['lat_end'], row['lon_end']
+                                    exit_lat, exit_lon = row['lat_start'], row['lon_start']
+                                    
+                                total_walk += haversine(curr_lat, curr_lon, entry_lat, entry_lon)
+                                current_route.append({'row': row, 'entry': (entry_lat, entry_lon), 'exit': (exit_lat, exit_lon)})
+                                curr_lat, curr_lon = exit_lat, exit_lon
+                            
+                            if total_walk < best_dist:
+                                best_dist = total_walk
+                                best_route = current_route
+
                     # Visualization
                     fig = go.Figure()
                     
-                    # Base Marker
+                    # 1. Base Marker
                     fig.add_trace(go.Scatter(x=[BASE_LON], y=[BASE_LAT], mode='markers+text', 
-                                             marker=dict(size=12, symbol='star', color='red'), name='La Base de Vie JESA', text=['Base']))
+                                             marker=dict(size=14, symbol='star', color='red'), name='La Base de Vie JESA', text=['Base']))
                     
-                    # Conveyors
-                    for _, row in pd.DataFrame(route).iterrows():
+                    # 2. Blue Conveyors
+                    for step in best_route:
+                        row = step['row']
                         fig.add_trace(go.Scatter(x=[row['lon_start'], row['lon_end']], y=[row['lat_start'], row['lat_end']], 
                                                  mode='lines+markers', name=row['Equipment'], line=dict(color='royalblue', width=6)))
                     
-                    # Walking Path
+                    # 3. Green Walking Path
                     w_lons, w_lats = [BASE_LON], [BASE_LAT]
-                    for row in route:
-                        w_lons.extend([row['lon_start'], row['lon_end']])
-                        w_lats.extend([row['lat_start'], row['lat_end']])
+                    for step in best_route:
+                        w_lons.extend([step['entry'][1], step['exit'][1]])
+                        w_lats.extend([step['entry'][0], step['exit'][0]])
                     
-                    fig.add_trace(go.Scatter(x=w_lons, y=w_lats, mode='lines', line=dict(color='green', width=3, dash='dash'), name='Optimal Walking Path'))
+                    fig.add_trace(go.Scatter(x=w_lons, y=w_lats, mode='lines', 
+                                             line=dict(color='green', width=3, dash='dash'), name='Optimal Walking Path'))
                     
                     fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    total_conv_len = sum([r['conv_len'] for r in route])
+                    total_conv_len = sum([step['row']['conv_len'] for step in best_route])
                     st.write(f"### Metrics")
-                    st.write(f"- 🟦 Total Conveyor Length: {total_conv_len:.2f} meters")
-                    st.write(f"- 🟩 Total Walking Distance: {walking_dist:.2f} meters")
+                    st.write(f"- 🟦 **Total Conveyor Length:** {total_conv_len:.0f} meters")
+                    st.write(f"- 🟩 **Total Walking Distance:** {best_dist:.0f} meters")
             
             except Exception as e:
-                st.error(f"Error: {e}")
-
-    # --- OTHER TABS (Keep your existing code) ---
-    with tabs[0]: st.subheader("Smoothing")
-    with tabs[1]: st.subheader("Leveling")
-    with tabs[2]: st.subheader("Shutdown")
-    with tabs[4]: st.subheader("Shift Report")
-    with tabs[5]: st.subheader("Admin")
+                st.error(f"Error optimizing path: {e}")
