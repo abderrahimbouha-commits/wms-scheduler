@@ -44,8 +44,9 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def parse_coords(coord_str):
     try:
-        # Removes quotes and splits by comma
-        lat, lon = map(float, str(coord_str).replace('"', '').split(','))
+        # Removes quotes and cleans up the string
+        clean_str = str(coord_str).replace('"', '').replace("'", "")
+        lat, lon = map(float, clean_str.split(','))
         return lat, lon
     except:
         return None, None
@@ -190,9 +191,12 @@ if check_password():
         st.header("🚜 Conveyor Inspection Planner")
         @st.cache_data
         def load_inspection_data():
-            # Fix: header=2 handles the two empty lines, .str.strip() handles column spacing
-            df = pd.read_csv("Convoyeur.csv", header=2)
-            df.columns = df.columns.str.strip()
+            # Robust reading: skip first 2 rows, clean all column whitespace
+            df = pd.read_csv("Convoyeur.csv", header=2, encoding='utf-8')
+            df.columns = df.columns.astype(str).str.strip()
+            
+            # Drop rows where Equipment is missing or isn't a string (cleans up potential tail rows)
+            df = df.dropna(subset=['Equipment'])
             
             df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
             df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
@@ -224,7 +228,8 @@ if check_password():
                 st.plotly_chart(fig, use_container_width=True)
                 st.write(f"**Total Path Length:** {route_df['length_m'].sum():.2f} meters")
         except Exception as e:
-            st.warning("Inspection data not loaded. Please ensure 'Convoyeur.csv' exists and format is valid.")
+            st.error(f"Data Loading Error: {e}")
+            st.info("Check your CSV file format. It must contain 'Equipment', 'Addresse Queue', and 'Addresse TM' columns.")
 
     # --- TAB 5 ---
     with tab5:
