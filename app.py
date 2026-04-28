@@ -44,7 +44,6 @@ def haversine(lat1, lon1, lat2, lon2):
 
 def parse_coords(coord_str):
     try:
-        # Removes quotes and cleans up the string
         clean_str = str(coord_str).replace('"', '').replace("'", "")
         lat, lon = map(float, clean_str.split(','))
         return lat, lon
@@ -191,11 +190,16 @@ if check_password():
         st.header("🚜 Conveyor Inspection Planner")
         @st.cache_data
         def load_inspection_data():
-            # Robust reading: skip first 2 rows, clean all column whitespace
-            df = pd.read_csv("Convoyeur.csv", header=2, encoding='utf-8')
+            # Skip 2 header rows, read CSV
+            df = pd.read_csv("Convoyeur.csv", header=2)
+            # The CSV starts with a comma (,), which creates an empty column 0.
+            # We drop column 0 so column 1 becomes column 0 (which is 'Equipment')
+            df = df.iloc[:, 1:]
+            
+            # Clean up whitespace in headers
             df.columns = df.columns.astype(str).str.strip()
             
-            # Drop rows where Equipment is missing or isn't a string (cleans up potential tail rows)
+            # Remove any trailing empty rows
             df = df.dropna(subset=['Equipment'])
             
             df[['lat_start', 'lon_start']] = df['Addresse Queue'].apply(lambda x: pd.Series(parse_coords(x)))
