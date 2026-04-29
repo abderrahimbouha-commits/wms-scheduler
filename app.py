@@ -55,11 +55,6 @@ def write_styled_excel(df, buffer):
                 if ":00" in str(col_name) and str(df.iloc[row_num-1, col_num]).upper() == "X":
                     worksheet.write(row_num, col_num, "X", format_busy)
 
-def append_to_gsheet(conn, new_data_row):
-    existing_data = conn.read(ttl=0) 
-    updated_df = pd.concat([existing_data, pd.DataFrame([new_data_row])], ignore_index=True)
-    conn.update(data=updated_df)
-
 # --- 4. MAIN APP ---
 if check_password():
     st.title("🏗️ Work Management Portal")
@@ -171,7 +166,6 @@ if check_password():
     with tabs[3]:
         st.header("🚜 Optimized Inspection Planner")
         st.write(f"📍 Start Point: **La Base de Vie JESA**")
-        
         try:
             df = pd.read_excel("Convoyeur.xlsx")
             df.columns = df.columns.astype(str).str.strip()
@@ -180,7 +174,6 @@ if check_password():
             df[['lat_end', 'lon_end']] = df['Addresse TM'].apply(lambda x: pd.Series(parse_coords(x)))
             
             selected = st.multiselect("Select Conveyors to Inspect:", df['Equipment'].unique())
-            
             if selected:
                 subset = df[df['Equipment'].isin(selected)].copy()
                 best_dist = float('inf')
@@ -228,8 +221,7 @@ if check_password():
             if st.button("Submit"):
                 try:
                     transcript = client.audio.transcriptions.create(model="whisper-1", file=audio)
-                    st.write(f"Transcript: {transcript.text}")
-                    st.success("Submitted!")
+                    st.success(f"Transcript received: {transcript.text}")
                 except Exception as e: st.error(f"API Error: {e}")
 
     # --- TAB 6: Admin ---
@@ -238,6 +230,11 @@ if check_password():
         admin_pwd = st.text_input("Admin Password", type="password", key="admin_pwd_field")
         if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
             try:
+                # DEBUG: Changed error handling here
                 master_df = conn.read(ttl="5s")
                 st.dataframe(master_df)
-            except: st.error("Database connection issue.")
+                ex_out = io.BytesIO()
+                master_df.to_excel(ex_out, index=False)
+                st.download_button("📥 Download Excel", data=ex_out.getvalue(), file_name="Report.xlsx")
+            except Exception as e: 
+                st.error(f"Database error: {e}")
