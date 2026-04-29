@@ -12,7 +12,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="JESA - Work Management Portal", page_icon="🏗️", layout="wide")
 
-# --- 2. GLOBAL PASSWORD PROTECTION ---
+# --- 2. AUTHENTICATION ---
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
 
 def check_password():
@@ -20,11 +20,11 @@ def check_password():
         if st.session_state["password"] == st.secrets["GENERAL_PASSWORD"]:
             st.session_state["authenticated"] = True
             del st.session_state["password"] 
-        else: st.session_state["authenticated"] = False
+        else: st.error("Incorrect password")
 
     if not st.session_state["authenticated"]:
         st.title("🔐 JESA Portal Access")
-        st.text_input("Please enter the Portal Password", type="password", on_change=password_entered, key="password")
+        st.text_input("Enter Portal Password", type="password", on_change=password_entered, key="password")
         return False
     return True
 
@@ -77,8 +77,8 @@ if check_password():
             df = df.sort_values(by=['Equipment', 'MH'], ascending=[True, False])
             hourly_cap = daily_cap / 8.0
             for h in range(9, 17): df[f"{h:02d}:00"] = ""
-            usage_tracker = {}
             results_day, results_start, results_end = [], [], []
+            usage_tracker = {}
             for idx, row in df.iterrows():
                 duration = int(np.clip(np.ceil(row['duree']), 1, 8))
                 mh_per_hour = row['MH'] / row['duree']
@@ -167,7 +167,7 @@ if check_password():
                 write_styled_excel(df, buffer)
                 st.download_button("Download Gantt", buffer, "Protocol_Gantt.xlsx", mime="application/vnd.ms-excel")
 
-    # --- TAB 4: INSPECTION PLANNER (Automatic Load & Optimized) ---
+    # --- TAB 4: INSPECTION PLANNER ---
     with tabs[3]:
         st.header("🚜 Optimized Inspection Planner")
         st.write(f"📍 Start Point: **La Base de Vie JESA**")
@@ -185,8 +185,6 @@ if check_password():
                 subset = df[df['Equipment'].isin(selected)].copy()
                 best_dist = float('inf')
                 best_route = None
-                
-                # GLOBAL OPTIMIZER
                 for p in permutations(subset.index):
                     for directions in product([0, 1], repeat=len(p)):
                         curr_lat, curr_lon = BASE_LAT, BASE_LON
@@ -220,7 +218,7 @@ if check_password():
                 fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as e:
-            st.error(f"Please ensure 'Convoyeur.xlsx' is in your GitHub folder. Error: {e}")
+            st.error(f"Error loading 'Convoyeur.xlsx': {e}")
 
     # --- TAB 5: Shift Report ---
     with tabs[4]:
@@ -228,9 +226,18 @@ if check_password():
         audio = st.audio_input("Record report", key="rec")
         if audio and client:
             if st.button("Submit"):
-                transcript = client.audio.transcriptions.create(model="whisper-1", file=audio)
-                st.write(f"Transcript: {transcript.text}")
+                try:
+                    transcript = client.audio.transcriptions.create(model="whisper-1", file=audio)
+                    st.write(f"Transcript: {transcript.text}")
+                    st.success("Submitted!")
+                except Exception as e: st.error(f"API Error: {e}")
 
     # --- TAB 6: Admin ---
     with tabs[5]:
         st.header("🔐 Admin Access")
+        admin_pwd = st.text_input("Admin Password", type="password", key="admin_pwd_field")
+        if admin_pwd == st.secrets["ADMIN_PASSWORD"]:
+            try:
+                master_df = conn.read(ttl="5s")
+                st.dataframe(master_df)
+            except: st.error("Database connection issue.")
