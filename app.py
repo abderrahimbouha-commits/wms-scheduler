@@ -426,6 +426,306 @@ def render_sidebar():
 # 5. TAB RENDERERS
 # ══════════════════════════════════════════════════════════════
 
+
+# ══════════════════════════════════════════════════════════════
+# CMMS KPI ENGINE  — language-agnostic column mapping
+# ══════════════════════════════════════════════════════════════
+
+# Possible column names per field (French & English variants)
+COL_MAP = {
+    "order":       ["Ordre", "Order", "Work Order", "WO", "Ordre de travail"],
+    "sys_status":  ["Statut système", "System Status", "Sys. Status", "SysStatus"],
+    "usr_status":  ["Statut utilis.", "User Status", "User Stat.", "Statut utilisateur"],
+    "created":     ["Créé le", "Created On", "Creation Date", "Date création"],
+    "equipment":   ["Obj. technique", "Technical Object", "Equipment", "Équipement"],
+    "equip_desc":  ["Descr.obj.tech.", "Equipment Description", "Désignation (poste technique)", "Description équipement"],
+    "priority":    ["Priorité", "Priority"],
+    "sched_date":  ["Début de base", "Basic Start", "Scheduled Start", "Date planifiée"],
+}
+
+def find_col(df, key):
+    """Return the first matching column name for a logical field."""
+    for candidate in COL_MAP.get(key, []):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+def detect_status_language(sys_vals):
+    """Detect if statuses are in French (SAP FR) or English (SAP EN)."""
+    sample = " ".join(str(v) for v in sys_vals.dropna().head(50))
+    if any(k in sample for k in ["CONF", "CRÉÉ", "LANC", "CNFP"]):
+        return "fr"
+    if any(k in sample for k in ["COMP", "CRTD", "REL", "TECO"]):
+        return "en"
+    return "fr"  # default
+
+def classify_orders(df):
+    """
+    Classify every unique WO into maintenance workflow stages.
+    Returns orders DataFrame with added columns:
+      is_executed, is_launched, is_prepared, is_scheduled, stage
+    """
+    order_col = find_col(df, "order")
+    sys_col   = find_col(df, "sys_status")
+    usr_col   = find_col(df, "usr_status")
+    eq_col    = find_col(df, "equipment")
+    eq_desc   = find_col(df, "equip_desc")
+    cr_col    = find_col(df, "created")
+
+    if not order_col:
+        return None, "❌ No 'Order/Ordre' column found in the file."
+
+    orders = df.drop_duplicates(subset=order_col).copy()
+    sys_s  = orders[sys_col].astype(str).str.upper()  if sys_col else pd.Series([""] * len(orders))
+    usr_s  = orders[usr_col].astype(str).str.upper()  if usr_col else pd.Series([""] * len(orders))
+
+    lang = detect_status_language(sys_s)
+
+    if lang == "fr":
+        # SAP French status codes
+        executed  = sys_s.str.contains(r"CONF|CNFP|TECO", na=False)
+        launched  = sys_s.str.contains(r"LANC", na=False) & ~executed
+        prepared  = (
+            usr_s.str.contains(r"CRPR|ATPL|AGAR|AVPD", na=False) |
+            executed | launched
+        )
+        scheduled = (
+            usr_s.str.contains(r"ATPL|AGAR", na=False) |
+            executed | launched
+        )
+    else:
+        # SAP English status codes
+        executed  = sys_s.str.contains(r"COMP|TECO|CLSD", na=False)
+        launched  = sys_s.str.contains(r"REL", na=False) & ~executed
+        prepared  = (
+            usr_s.str.contains(r"PREP|SCHD|APPR", na=False) |
+            executed | launched
+        )
+        scheduled = (
+            usr_s.str.contains(r"SCHD|APPR", na=False) |
+            executed | launched
+        )
+
+    orders["_executed"]  = executed.values
+    orders["_launched"]  = launched.values
+    orders["_prepared"]  = prepared.values
+    orders["_scheduled"] = scheduled.values
+    orders["_eq"]        = orders[eq_col].astype(str)   if eq_col   else "N/A"
+    orders["_eq_desc"]   = orders[eq_desc].astype(str)  if eq_desc  else orders["_eq"]
+    orders["_created"]   = pd.to_datetime(orders[cr_col], errors="coerce") if cr_col else pd.NaT
+    orders["_order"]     = orders[order_col]
+
+    # Assign a single pipeline stage label
+    def stage(row):
+        if row["_executed"]:    return "Executed"
+        if row["_launched"]:    return "In Execution"
+        if row["_scheduled"]:   return "Scheduled"
+        if row["_prepared"]:    return "Prepared"
+        return "Not Prepared"
+
+    orders["_stage"] = orders.apply(stage, axis=1)
+    return orders, None
+
+
+def compute_kpis(orders):
+    """Return a dict of global KPI values."""
+    n     = len(orders)
+    today = pd.Timestamp.today()
+
+    pct_prep  = 100 * orders["_prepared"].sum()  / n if n else 0
+    pct_sched = 100 * orders["_scheduled"].sum() / n if n else 0
+    pct_exec  = 100 * orders["_executed"].sum()  / n if n else 0
+
+    # Backlog = open WOs stuck at each stage
+    is_open      = ~orders["_executed"]
+    bl_planner   = orders[is_open & ~orders["_prepared"]]
+    bl_scheduler = orders[is_open & orders["_prepared"] & ~orders["_scheduled"]]
+    bl_execution = orders[is_open & orders["_scheduled"]]
+
+    def age_stats(sub):
+        if len(sub) == 0:
+            return 0, 0, 0
+        ages = (today - sub["_created"]).dt.days.dropna()
+        return len(sub), round(ages.mean(), 1) if len(ages) else 0, int(ages.max()) if len(ages) else 0
+
+    return {
+        "n_total":    n,
+        "n_exec":     int(orders["_executed"].sum()),
+        "n_open":     int(is_open.sum()),
+        "pct_prep":   round(pct_prep, 1),
+        "pct_sched":  round(pct_sched, 1),
+        "pct_exec":   round(pct_exec, 1),
+        "bl_plan":    age_stats(bl_planner),
+        "bl_sched":   age_stats(bl_scheduler),
+        "bl_exec":    age_stats(bl_execution),
+    }
+
+
+def kpi_by_equipment(orders):
+    """Return per-equipment KPI DataFrame."""
+    today = pd.Timestamp.today()
+    rows = []
+    for eq, grp in orders.groupby("_eq"):
+        n   = len(grp)
+        desc = grp["_eq_desc"].iloc[0]
+        is_open = ~grp["_executed"]
+        bl_n    = is_open & ~grp["_scheduled"]
+        ages    = (today - grp.loc[is_open, "_created"]).dt.days.dropna()
+        rows.append({
+            "Equipment":     eq,
+            "Description":   desc,
+            "Total WOs":     n,
+            "% Preparation": round(100 * grp["_prepared"].sum()  / n, 1),
+            "% Planification": round(100 * grp["_scheduled"].sum() / n, 1),
+            "% Execution":   round(100 * grp["_executed"].sum()  / n, 1),
+            "Open WOs":      int(is_open.sum()),
+            "Backlog (open not sched)": int(bl_n.sum()),
+            "Avg Age (days)": round(ages.mean(), 0) if len(ages) else 0,
+        })
+    return pd.DataFrame(rows).sort_values("Open WOs", ascending=False)
+
+
+def gauge_chart(value, title, color="#0079C2"):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value,
+        number={"suffix": "%", "font": {"size": 32, "family": "Syne", "color": "#E8F0F7"}},
+        title={"text": title, "font": {"size": 13, "family": "DM Sans", "color": "#7A9BB5"}},
+        gauge={
+            "axis":       {"range": [0, 100], "tickcolor": "#1A3A55", "tickfont": {"color": "#7A9BB5"}},
+            "bar":        {"color": color},
+            "bgcolor":    "#071D30",
+            "bordercolor":"#1A3A55",
+            "steps": [
+                {"range": [0,  50], "color": "#0A1E30"},
+                {"range": [50, 75], "color": "#0A2540"},
+                {"range": [75,100], "color": "#0A3050"},
+            ],
+            "threshold": {
+                "line": {"color": "#00B4E6", "width": 2},
+                "thickness": 0.75,
+                "value": value,
+            },
+        },
+    ))
+    fig.update_layout(
+        paper_bgcolor="#071D30", plot_bgcolor="#071D30",
+        font=dict(color="#E8F0F7"),
+        height=220, margin=dict(l=20, r=20, t=40, b=10),
+    )
+    return fig
+
+
+def backlog_age_bar(kpis):
+    stages = ["Planner\nBacklog", "Scheduler\nBacklog", "Execution\nBacklog"]
+    counts = [kpis["bl_plan"][0],  kpis["bl_sched"][0],  kpis["bl_exec"][0]]
+    avgs   = [kpis["bl_plan"][1],  kpis["bl_sched"][1],  kpis["bl_exec"][1]]
+    maxes  = [kpis["bl_plan"][2],  kpis["bl_sched"][2],  kpis["bl_exec"][2]]
+    colors = ["#E74C3C", "#F39C12", "#0079C2"]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Avg Age (days)", x=stages, y=avgs,
+        marker_color=colors, opacity=0.85,
+        text=[f"{v:.0f}d" for v in avgs], textposition="outside",
+        hovertemplate="<b>%{x}</b><br>WOs: %{customdata}<br>Avg Age: %{y:.0f}d<extra></extra>",
+        customdata=counts,
+    ))
+    fig.add_trace(go.Scatter(
+        name="Max Age (days)", x=stages, y=maxes,
+        mode="markers", marker=dict(color="#00B4E6", size=10, symbol="diamond"),
+        hovertemplate="Max Age: %{y}d<extra></extra>",
+    ))
+    fig.update_layout(
+        **plotly_dark_layout(), height=300,
+        title="Backlog Age (Average & Max in days)",
+        showlegend=True, barmode="group",
+        yaxis_title="Days",
+    )
+    return fig
+
+
+def pipeline_funnel(kpis):
+    n = kpis["n_total"]
+    labels  = ["Total WOs", "Prepared", "Scheduled", "Executed"]
+    values  = [
+        n,
+        round(n * kpis["pct_prep"]  / 100),
+        round(n * kpis["pct_sched"] / 100),
+        round(n * kpis["pct_exec"]  / 100),
+    ]
+    colors  = ["#1A3A55", "#005A9E", "#0079C2", "#00B4E6"]
+    fig = go.Figure(go.Funnel(
+        y=labels, x=values,
+        textinfo="value+percent initial",
+        marker=dict(color=colors),
+        connector=dict(line=dict(color="#071D30", width=2)),
+    ))
+    fig.update_layout(
+        **plotly_dark_layout(), height=320,
+        title="Maintenance Pipeline Funnel",
+    )
+    return fig
+
+
+def stage_donut(orders):
+    counts = orders["_stage"].value_counts()
+    colors_map = {
+        "Executed":     "#00B4E6",
+        "In Execution": "#0079C2",
+        "Scheduled":    "#2ECC71",
+        "Prepared":     "#F39C12",
+        "Not Prepared": "#E74C3C",
+    }
+    labels = counts.index.tolist()
+    values = counts.values.tolist()
+    colors = [colors_map.get(l, "#888") for l in labels]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, hole=0.55,
+        marker=dict(colors=colors),
+        textfont=dict(family="DM Sans"),
+        hovertemplate="%{label}: %{value} WOs (%{percent})<extra></extra>",
+    ))
+    fig.update_layout(
+        **plotly_dark_layout(), height=320,
+        title="WO Distribution by Stage",
+    )
+    return fig
+
+
+def kpi_color(val):
+    """Return CSS color string based on KPI value."""
+    if val >= 80:   return "#2ECC71"
+    if val >= 50:   return "#F39C12"
+    return "#E74C3C"
+
+
+def kpi_card_html(label, value_pct, count, sublabel=""):
+    color = kpi_color(value_pct)
+    bar_w = max(4, int(value_pct))
+    return f"""
+    <div class="kpi-card">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value" style="color:{color};">{value_pct}%</div>
+        <div style="background:#1A3A55;border-radius:4px;height:6px;margin:.4rem 0;">
+            <div style="background:{color};width:{bar_w}%;height:6px;border-radius:4px;transition:width .5s;"></div>
+        </div>
+        <div class="kpi-sub" style="color:{color};">{count} WOs {sublabel}</div>
+    </div>"""
+
+
+def backlog_card_html(label, n, avg, maxd, icon, color):
+    return f"""
+    <div class="kpi-card" style="border-left:3px solid {color};">
+        <div class="kpi-label">{icon} {label}</div>
+        <div class="kpi-value" style="color:{color};">{n}</div>
+        <div class="kpi-sub">Avg age: <b>{avg:.0f}d</b> · Max: <b>{maxd}d</b></div>
+    </div>"""
+
+
+# ══════════════════════════════════════════════════════════════
+# TAB: DASHBOARD
+# ══════════════════════════════════════════════════════════════
 def tab_dashboard():
     st.markdown("""
     <div class="portal-header">
@@ -434,85 +734,262 @@ def tab_dashboard():
                  onerror="this.onerror=null;this.src='https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/JESA_logo.svg/320px-JESA_logo.svg.png';"
                  style="height:48px;object-fit:contain;filter:brightness(0) invert(1);" alt="JESA"/>
             <div>
-                <h1>Work Management Portal</h1>
-                <p>Live operations dashboard — Casablanca, Morocco</p>
+                <h1>Maintenance KPI Dashboard</h1>
+                <p>CMMS Extraction Analysis — Upload your SAP/CMMS export to compute live KPIs</p>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # KPI row
-    st.markdown("""
+    # ── Upload zone ──
+    with st.expander("📂 Upload CMMS Extraction", expanded="cmms_orders" not in st.session_state):
+        st.markdown("""
+        <div style="color:var(--muted);font-size:.85rem;margin-bottom:.8rem;">
+        Upload your SAP/CMMS extraction file (Excel or CSV). The system auto-detects French & English columns,
+        and recalculates all KPIs instantly. You can re-upload at any time to refresh the analysis.
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_up, col_info = st.columns([2, 1])
+        with col_up:
+            uploaded = st.file_uploader(
+                "Drop your CMMS extraction here",
+                type=["xlsx", "xls", "csv"],
+                key="cmms_upload",
+                label_visibility="collapsed",
+            )
+        with col_info:
+            st.markdown("""
+            <div class="card" style="font-size:.78rem;color:var(--muted);padding:.8rem 1rem;">
+                <b style="color:var(--text);">Supported columns:</b><br>
+                Ordre / Order · Statut système / System Status<br>
+                Statut utilis. / User Status · Créé le / Created<br>
+                Obj. technique / Equipment · Priorité / Priority<br><br>
+                <b style="color:var(--text);">Languages:</b> French 🇫🇷 & English 🇬🇧
+            </div>
+            """, unsafe_allow_html=True)
+
+        if uploaded:
+            with st.spinner("⚙️ Parsing extraction & computing KPIs…"):
+                try:
+                    if uploaded.name.endswith(".csv"):
+                        raw_df = pd.read_csv(uploaded)
+                    else:
+                        raw_df = pd.read_excel(uploaded)
+
+                    orders, err = classify_orders(raw_df)
+                    if err:
+                        st.error(err)
+                    else:
+                        st.session_state["cmms_orders"] = orders
+                        st.session_state["cmms_raw"]    = raw_df
+                        st.success(f"✅ Loaded **{len(raw_df):,}** rows · **{orders['_order'].nunique():,}** unique Work Orders · {len(raw_df.columns)} columns detected")
+                except Exception as e:
+                    st.error(f"❌ Failed to read file: {e}")
+
+    # ── No data yet ──
+    if "cmms_orders" not in st.session_state:
+        st.markdown("""
+        <div class="card" style="text-align:center;padding:4rem 2rem;color:var(--muted);">
+            <div style="font-size:3rem;margin-bottom:1rem;">📊</div>
+            <div style="font-size:1.1rem;color:var(--text);font-family:'Syne',sans-serif;font-weight:600;margin-bottom:.5rem;">
+                No extraction loaded yet
+            </div>
+            <div>Upload your CMMS/SAP extraction above to see live maintenance KPIs.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    orders = st.session_state["cmms_orders"]
+    kpis   = compute_kpis(orders)
+
+    # ── Filters ──
+    with st.container():
+        fc1, fc2, fc3 = st.columns([2, 1, 1])
+        with fc1:
+            eq_options = sorted(orders["_eq"].dropna().unique().tolist())
+            eq_descs   = {row["_eq"]: row["_eq_desc"] for _, row in orders[["_eq","_eq_desc"]].drop_duplicates().iterrows()}
+            eq_labels  = {e: f"{e} — {eq_descs.get(e,'')[:30]}" for e in eq_options}
+            sel_eq = st.multiselect(
+                "🔍 Filter by Equipment",
+                options=eq_options,
+                format_func=lambda x: eq_labels.get(x, x),
+                placeholder="All equipment (no filter)",
+            )
+        with fc2:
+            sel_stage = st.multiselect(
+                "📌 Filter by Stage",
+                options=["Not Prepared", "Prepared", "Scheduled", "In Execution", "Executed"],
+                placeholder="All stages",
+            )
+        with fc3:
+            pri_col = find_col(orders, "priority")
+            if pri_col:
+                pri_options = sorted(orders[pri_col].dropna().unique().tolist())
+                sel_pri = st.multiselect("⚡ Priority", options=[str(int(p)) if isinstance(p, float) else str(p) for p in pri_options], placeholder="All")
+            else:
+                sel_pri = []
+
+    # Apply filters
+    filtered = orders.copy()
+    if sel_eq:
+        filtered = filtered[filtered["_eq"].isin(sel_eq)]
+    if sel_stage:
+        filtered = filtered[filtered["_stage"].isin(sel_stage)]
+    if sel_pri and pri_col:
+        filtered = filtered[filtered[pri_col].astype(str).str.replace(".0","",regex=False).isin(sel_pri)]
+
+    kpis_f = compute_kpis(filtered) if len(filtered) else kpis
+
+    # ── Global KPI Cards ──
+    st.markdown('<div class="sec-title">📈 Global Maintenance KPIs</div>', unsafe_allow_html=True)
+
+    n_f = kpis_f["n_total"]
+    cards_html = f"""
     <div class="kpi-row">
         <div class="kpi-card">
-            <div class="kpi-label">Active Tasks</div>
-            <div class="kpi-value">24</div>
-            <div class="kpi-sub">↑ 3 since yesterday</div>
+            <div class="kpi-label">Total Work Orders</div>
+            <div class="kpi-value">{n_f:,}</div>
+            <div class="kpi-sub">{kpis_f['n_exec']:,} executed · {kpis_f['n_open']:,} open</div>
         </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Inspections Today</div>
-            <div class="kpi-value">7</div>
-            <div class="kpi-sub">↑ On schedule</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Shift Reports</div>
-            <div class="kpi-value">12</div>
-            <div class="kpi-sub">↑ This week</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Equipment Online</div>
-            <div class="kpi-value">18</div>
-            <div class="kpi-sub">↑ 95% uptime</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-label">Incidents</div>
-            <div class="kpi-value">0</div>
-            <div class="kpi-sub" style="color:var(--success);">✓ All clear</div>
-        </div>
+        {kpi_card_html("% Préparation", kpis_f['pct_prep'],
+            round(n_f*kpis_f['pct_prep']/100), "prepared")}
+        {kpi_card_html("% Planification", kpis_f['pct_sched'],
+            round(n_f*kpis_f['pct_sched']/100), "scheduled")}
+        {kpi_card_html("% Exécution", kpis_f['pct_exec'],
+            kpis_f['n_exec'], "confirmed done")}
+    </div>
+    """
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    # ── Backlog Age Cards ──
+    st.markdown('<div class="sec-title">🗂️ Backlog Ages</div>', unsafe_allow_html=True)
+    bl = kpis_f
+    st.markdown(f"""
+    <div class="kpi-row">
+        {backlog_card_html("Planner Backlog",   bl['bl_plan'][0],  bl['bl_plan'][1],  bl['bl_plan'][2],  "📋", "#E74C3C")}
+        {backlog_card_html("Scheduler Backlog", bl['bl_sched'][0], bl['bl_sched'][1], bl['bl_sched'][2], "📅", "#F39C12")}
+        {backlog_card_html("Execution Backlog", bl['bl_exec'][0],  bl['bl_exec'][1],  bl['bl_exec'][2],  "⚙️", "#0079C2")}
+    </div>
+    <div style="color:var(--muted);font-size:.76rem;margin-top:-.5rem;margin-bottom:1rem;">
+        ℹ️  Planner = not yet prepared &nbsp;·&nbsp; Scheduler = prepared but not scheduled &nbsp;·&nbsp;
+        Execution = scheduled but not confirmed done &nbsp;·&nbsp; Age measured from WO creation date
     </div>
     """, unsafe_allow_html=True)
 
-    c1, c2 = st.columns(2)
+    # ── Charts Row 1 ──
+    c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown('<div class="sec-title">Weekly Task Load</div>', unsafe_allow_html=True)
-        days  = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        vals  = [8, 12, 6, 15, 10, 4, 2]
-        fig   = go.Figure(go.Bar(
-            x=days, y=vals,
-            marker=dict(color='#0079C2', opacity=0.85),
-            hovertemplate='%{x}: %{y} tasks<extra></extra>',
-        ))
-        fig.update_layout(**plotly_dark_layout(), height=260, title='Tasks per Day')
-        st.plotly_chart(fig, use_container_width=True)
-
+        st.plotly_chart(gauge_chart(kpis_f["pct_prep"],  "% Préparation",  "#005A9E"), use_container_width=True)
     with c2:
-        st.markdown('<div class="sec-title">Equipment Status</div>', unsafe_allow_html=True)
-        labels = ["Online", "Maintenance", "Offline"]
-        values = [18, 3, 1]
-        colors = ['#0079C2', '#00B4E6', '#E74C3C']
-        fig2 = go.Figure(go.Pie(
-            labels=labels, values=values,
-            hole=.55,
-            marker=dict(colors=colors),
-            textfont=dict(family='DM Sans'),
-        ))
-        fig2.update_layout(**plotly_dark_layout(), height=260,
-                           title='Fleet Status (22 units)',
-                           showlegend=True)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(gauge_chart(kpis_f["pct_sched"], "% Planification","#0079C2"), use_container_width=True)
+    with c3:
+        st.plotly_chart(gauge_chart(kpis_f["pct_exec"],  "% Exécution",    "#00B4E6"), use_container_width=True)
 
-    st.markdown('<div class="sec-title">Recent Activity</div>', unsafe_allow_html=True)
-    activity = pd.DataFrame({
-        "Time":      ["09:42", "09:15", "08:50", "08:22", "07:55"],
-        "Event":     ["Inspection completed — Conv. A3",
-                      "Shift report submitted by Youssef",
-                      "Leveling task started — Zone B",
-                      "Equipment C7 back online",
-                      "Morning briefing logged"],
-        "User":      ["B. Moussa", "Y. Rachid", "A. Karimi", "System", "K. Hamza"],
-        "Status":    ["✅ Done", "✅ Done", "🔄 Active", "✅ Done", "✅ Done"],
-    })
-    st.dataframe(activity, use_container_width=True, hide_index=True)
+    # ── Charts Row 2 ──
+    c4, c5 = st.columns(2)
+    with c4:
+        st.plotly_chart(stage_donut(filtered),      use_container_width=True)
+    with c5:
+        st.plotly_chart(pipeline_funnel(kpis_f),   use_container_width=True)
+
+    # ── Backlog Age Bar ──
+    st.plotly_chart(backlog_age_bar(kpis_f), use_container_width=True)
+
+    # ── Per-Equipment KPI Table ──
+    st.markdown('<div class="sec-title">🏭 KPIs per Equipment</div>', unsafe_allow_html=True)
+
+    eq_kpi_df = kpi_by_equipment(filtered)
+
+    # Color scale on % cols
+    def color_pct(val):
+        color = kpi_color(val)
+        return f"color: {color}; font-weight: 600;"
+
+    # Search filter
+    eq_search = st.text_input("🔍 Search equipment", placeholder="Type equipment ID or description…", key="eq_search")
+    if eq_search:
+        mask = eq_kpi_df.astype(str).apply(lambda c: c.str.contains(eq_search, case=False)).any(axis=1)
+        eq_kpi_df = eq_kpi_df[mask]
+
+    st.dataframe(
+        eq_kpi_df.style
+            .applymap(color_pct, subset=["% Preparation", "% Planification", "% Execution"])
+            .format({
+                "% Preparation": "{:.1f}%",
+                "% Planification": "{:.1f}%",
+                "% Execution": "{:.1f}%",
+                "Avg Age (days)": "{:.0f}",
+            }),
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+    )
+
+    # ── Top-10 backlog chart ──
+    st.markdown('<div class="sec-title">🔴 Top 10 Equipment by Open Backlog</div>', unsafe_allow_html=True)
+    top10 = eq_kpi_df.nlargest(10, "Open WOs")
+    fig_top = go.Figure(go.Bar(
+        x=top10["Open WOs"],
+        y=top10["Description"].str[:25],
+        orientation="h",
+        marker=dict(
+            color=top10["% Execution"],
+            colorscale=[[0,"#E74C3C"],[0.5,"#F39C12"],[1,"#0079C2"]],
+            colorbar=dict(title="% Exec", ticksuffix="%"),
+        ),
+        text=top10["Open WOs"],
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Open WOs: %{x}<br>% Execution: %{marker.color:.1f}%<extra></extra>",
+    ))
+    fig_top.update_layout(
+        **plotly_dark_layout(), height=380,
+        title="Open WOs per Equipment (color = % Execution)",
+        xaxis_title="Open Work Orders",
+        yaxis=dict(autorange="reversed"),
+    )
+    st.plotly_chart(fig_top, use_container_width=True)
+
+    # ── Priority breakdown ──
+    pri_col = find_col(filtered, "priority")
+    if pri_col:
+        st.markdown('<div class="sec-title">⚡ WO Distribution by Priority</div>', unsafe_allow_html=True)
+        pri_counts = filtered[pri_col].value_counts().sort_index()
+        fig_pri = go.Figure(go.Bar(
+            x=[f"P{int(p)}" if isinstance(p, float) else str(p) for p in pri_counts.index],
+            y=pri_counts.values,
+            marker=dict(color=["#E74C3C","#F39C12","#0079C2","#00B4E6"][:len(pri_counts)], opacity=0.85),
+            text=pri_counts.values, textposition="outside",
+        ))
+        fig_pri.update_layout(**plotly_dark_layout(), height=260, title="Work Orders by Priority")
+        st.plotly_chart(fig_pri, use_container_width=True)
+
+    # ── Download ──
+    st.markdown('<div class="sec-title">📥 Export KPI Report</div>', unsafe_allow_html=True)
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+            eq_kpi_df.to_excel(writer, sheet_name="KPI par Équipement", index=False)
+            filtered[["_order","_eq","_eq_desc","_stage","_created"]].rename(columns={
+                "_order":"Ordre","_eq":"Équipement","_eq_desc":"Description",
+                "_stage":"Étape","_created":"Créé le",
+            }).to_excel(writer, sheet_name="Détail OT", index=False)
+        st.download_button(
+            "📊 Download KPI Report (Excel)",
+            buf.getvalue(),
+            file_name=f"JESA_KPI_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with dl2:
+        st.download_button(
+            "📄 Download Equipment Table (CSV)",
+            eq_kpi_df.to_csv(index=False).encode(),
+            file_name=f"JESA_Equip_KPI_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 
 def tab_smoothing():
