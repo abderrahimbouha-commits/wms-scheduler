@@ -158,23 +158,40 @@ if check_password():
                 w_lo, w_la = [BASE_LON], [BASE_LAT]
                 for s in b_route:
                     r = s['r']
-                    fig.add_trace(go.Scatter(x=[r['lon_s'], r['lon_end' if 'lon_end' in r else 'lon_e']], y=[r['lat_s'], r['lat_e']], mode='lines+markers', name=r['Equipment'], line=dict(color='royalblue', width=6)))
+                    fig.add_trace(go.Scatter(x=[r['lon_s'], r['lon_e']], y=[r['lat_s'], r['lat_e']], mode='lines+markers', name=r['Equipment'], line=dict(color='royalblue', width=6)))
                     w_lo.extend([s['ent'][1], s['exi'][1]]); w_la.extend([s['ent'][0], s['exi'][0]])
                 fig.add_trace(go.Scatter(x=w_lo, y=w_la, mode='lines', line=dict(color='green', width=3, dash='dash'), name='Path'))
                 fig.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
                 st.plotly_chart(fig, use_container_width=True)
         except Exception as e: st.error(f"Error: {e}")
 
-    # --- TAB 5: SHIFT REPORT ---
+    # --- TAB 5: SHIFT REPORT (Traduction Automatique) ---
     with tabs[4]:
         st.header("🎙️ Shift Report")
         audio = st.audio_input("Record your report")
         if audio and st.button("🚀 Submit to Database"):
             try:
-                with st.spinner("Transcribing..."):
+                with st.spinner("Transcription et Traduction en cours..."):
+                    # 1. Transcription (Whisper)
                     tr = client.audio.transcriptions.create(model="whisper-1", file=audio)
-                    append_to_gsheet(conn, {"Date": datetime.now().strftime("%Y-%m-%d %H:%M"), "Compte Rendu": tr.text})
-                    st.success("✅ Report saved!")
+                    
+                    # 2. Traduction et Nettoyage (GPT-4o)
+                    response = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": "Tu es un assistant JESA. Traduis systématiquement le compte rendu suivant en français professionnel. Si le texte est déjà en français, corrige uniquement la grammaire et la ponctuation. Ne réponds que par le texte traduit."},
+                            {"role": "user", "content": tr.text}
+                        ]
+                    )
+                    translated_text = response.choices[0].message.content
+                    
+                    # 3. Enregistrement
+                    append_to_gsheet(conn, {
+                        "Date": datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                        "Compte Rendu": translated_text
+                    })
+                    st.success("✅ Rapport enregistré en français !")
+                    st.write(f"**Texte final :** {translated_text}")
             except Exception as e: st.error(f"Error: {e}")
 
     # --- TAB 6: ADMIN ---
