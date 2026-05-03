@@ -25,18 +25,20 @@ st.markdown("""
 /* ── Google Font ── */
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap');
 
-/* ── Root palette ── */
+/* ── JESA Official Blue Palette ── */
 :root {
-    --bg:        #0D1117;
-    --surface:   #161B22;
-    --border:    #30363D;
-    --accent:    #F0A500;
-    --accent2:   #E05C1A;
-    --text:      #E6EDF3;
-    --muted:     #8B949E;
-    --success:   #3FB950;
-    --danger:    #F85149;
-    --info:      #58A6FF;
+    --bg:        #04111F;
+    --surface:   #071D30;
+    --surface2:  #0A2540;
+    --border:    #1A3A55;
+    --accent:    #0079C2;
+    --accent2:   #005A9E;
+    --accent3:   #00B4E6;
+    --text:      #E8F0F7;
+    --muted:     #7A9BB5;
+    --success:   #2ECC71;
+    --danger:    #E74C3C;
+    --info:      #00B4E6;
     --radius:    12px;
 }
 
@@ -68,13 +70,13 @@ html, body, [class*="css"] {
     transition: all .2s;
 }
 [data-testid="stSidebar"] .stButton button:hover {
-    background: rgba(240,165,0,.12);
-    color: var(--accent);
+    background: rgba(0,121,194,.15);
+    color: var(--accent3);
 }
 
 /* ── Page header banner ── */
 .portal-header {
-    background: linear-gradient(135deg, #F0A500 0%, #E05C1A 100%);
+    background: linear-gradient(135deg, #005A9E 0%, #0079C2 50%, #00B4E6 100%);
     padding: 2rem 2.5rem;
     border-radius: var(--radius);
     margin-bottom: 1.8rem;
@@ -112,7 +114,7 @@ html, body, [class*="css"] {
     position: absolute;
     top: 0; left: 0; right: 0;
     height: 3px;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    background: linear-gradient(90deg, var(--accent2), var(--accent), var(--accent3));
 }
 .kpi-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .kpi-value { font-family: 'Syne', sans-serif; font-size: 1.9rem; font-weight: 700; color: var(--text); line-height: 1.2; }
@@ -159,7 +161,7 @@ html, body, [class*="css"] {
 
 /* ── Buttons ── */
 .stButton > button {
-    background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%) !important;
+    background: linear-gradient(135deg, var(--accent2) 0%, var(--accent) 50%, var(--accent3) 100%) !important;
     color: #fff !important;
     font-family: 'Syne', sans-serif !important;
     font-weight: 600 !important;
@@ -168,7 +170,7 @@ html, body, [class*="css"] {
     padding: 0.55rem 1.4rem !important;
     letter-spacing: .03em !important;
     transition: opacity .2s, transform .15s !important;
-    box-shadow: 0 4px 14px rgba(240,165,0,.25) !important;
+    box-shadow: 0 4px 14px rgba(0,121,194,.3) !important;
 }
 .stButton > button:hover {
     opacity: .9 !important;
@@ -193,7 +195,7 @@ html, body, [class*="css"] {
     border: none;
 }
 .stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%) !important;
+    background: linear-gradient(135deg, var(--accent2) 0%, var(--accent) 100%) !important;
     color: #fff !important;
     font-weight: 600;
 }
@@ -218,7 +220,7 @@ html, body, [class*="css"] {
     font-family: 'Syne', sans-serif;
     font-weight: 800;
     font-size: 2rem;
-    background: linear-gradient(135deg, #F0A500, #E05C1A);
+    background: linear-gradient(135deg, #0079C2, #00B4E6);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin-bottom: 0.3rem;
@@ -235,9 +237,9 @@ html, body, [class*="css"] {
     text-transform: uppercase;
     letter-spacing: .05em;
 }
-.badge-success { background: rgba(63,185,80,.15); color: var(--success); }
-.badge-warn    { background: rgba(240,165,0,.15);  color: var(--accent);  }
-.badge-danger  { background: rgba(248,81,73,.15);  color: var(--danger);  }
+.badge-success { background: rgba(46,204,113,.15); color: var(--success); }
+.badge-warn    { background: rgba(0,121,194,.2);   color: var(--accent3); }
+.badge-danger  { background: rgba(231,76,60,.15);  color: var(--danger);  }
 
 /* ── Divider ── */
 hr { border-color: var(--border) !important; margin: 1.5rem 0 !important; }
@@ -282,8 +284,8 @@ def write_styled_excel(df, buffer):
         df.to_excel(writer, index=False, sheet_name='Schedule')
         wb = writer.book
         ws = writer.sheets['Schedule']
-        fmt_busy  = wb.add_format({'bg_color': '#F0A500', 'font_color': '#ffffff', 'bold': True, 'align': 'center'})
-        fmt_head  = wb.add_format({'bg_color': '#161B22', 'font_color': '#E6EDF3', 'bold': True})
+        fmt_busy  = wb.add_format({'bg_color': '#0079C2', 'font_color': '#ffffff', 'bold': True, 'align': 'center'})
+        fmt_head  = wb.add_format({'bg_color': '#071D30', 'font_color': '#E8F0F7', 'bold': True})
         fmt_border= wb.add_format({'border': 1, 'border_color': '#30363D'})
         for col_num, col_name in enumerate(df.columns):
             ws.write(0, col_num, col_name, fmt_head)
@@ -302,12 +304,12 @@ def append_to_gsheet(conn, new_row):
 
 def plotly_dark_layout():
     return dict(
-        plot_bgcolor  = '#0D1117',
-        paper_bgcolor = '#161B22',
-        font          = dict(family='DM Sans', color='#E6EDF3'),
-        xaxis         = dict(showgrid=True, gridcolor='#30363D', zeroline=False),
-        yaxis         = dict(showgrid=True, gridcolor='#30363D', zeroline=False),
-        legend        = dict(bgcolor='#161B22', bordercolor='#30363D', borderwidth=1),
+        plot_bgcolor  = '#04111F',
+        paper_bgcolor = '#071D30',
+        font          = dict(family='DM Sans', color='#E8F0F7'),
+        xaxis         = dict(showgrid=True, gridcolor='#1A3A55', zeroline=False),
+        yaxis         = dict(showgrid=True, gridcolor='#1A3A55', zeroline=False),
+        legend        = dict(bgcolor='#071D30', bordercolor='#1A3A55', borderwidth=1),
         margin        = dict(l=20, r=20, t=40, b=20),
     )
 
@@ -328,8 +330,14 @@ def check_password():
     col_c = st.columns([1, 1.4, 1])[1]
     with col_c:
         st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
-        st.markdown('<div class="login-logo">🏗️ JESA</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-sub">Work Management Portal · Secure Access</div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div style="text-align:center;margin-bottom:1.5rem;">
+            <img src="https://www.jesagroup.com/themes/custom/jesa/logo.svg"
+                 onerror="this.onerror=null;this.src='https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/JESA_logo.svg/320px-JESA_logo.svg.png';"
+                 style="height:60px;object-fit:contain;" alt="JESA Logo"/>
+        </div>
+        """, unsafe_allow_html=True)
+        st.markdown('<div class="login-sub" style="text-align:center;">Work Management Portal · Secure Access</div>', unsafe_allow_html=True)
 
         if st.session_state["login_attempts"] >= 5:
             st.markdown('<span class="badge badge-danger">🔒 Account locked — contact admin</span>', unsafe_allow_html=True)
@@ -360,22 +368,24 @@ def check_password():
 def render_sidebar():
     with st.sidebar:
         st.markdown("""
-        <div style="padding:1.2rem 1rem .8rem;">
-            <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1.4rem;
-                        background:linear-gradient(135deg,#F0A500,#E05C1A);
-                        -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
-                🏗️ JESA WMS
+        <div style="padding:1.2rem 1rem .8rem;text-align:center;">
+            <img src="https://www.jesagroup.com/themes/custom/jesa/logo.svg"
+                 onerror="this.onerror=null;this.src='https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/JESA_logo.svg/320px-JESA_logo.svg.png';"
+                 style="height:52px;object-fit:contain;margin-bottom:.6rem;"
+                 alt="JESA Logo"/>
+            <div style="font-family:'DM Sans',sans-serif;font-size:.7rem;
+                        color:#7A9BB5;letter-spacing:.08em;text-transform:uppercase;">
+                Work Management Portal
             </div>
-            <div style="color:var(--muted);font-size:.75rem;margin-top:.2rem;">Work Management Portal</div>
         </div>
-        <hr style="border-color:var(--border);margin:.5rem 0 1rem;">
+        <hr style="border-color:#1A3A55;margin:.5rem 0 1rem;">
         """, unsafe_allow_html=True)
 
         now = datetime.now()
         st.markdown(f"""
         <div style="padding:.6rem 1rem;margin-bottom:1rem;">
             <div style="color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;">Session</div>
-            <div style="font-family:'Syne',sans-serif;font-size:1rem;color:var(--accent);">
+            <div style="font-family:'Syne',sans-serif;font-size:1rem;color:var(--accent3);">
                 {now.strftime('%A, %d %b %Y')}
             </div>
             <div style="color:var(--muted);font-size:.82rem;">{now.strftime('%H:%M')} · Active</div>
@@ -419,9 +429,14 @@ def render_sidebar():
 def tab_dashboard():
     st.markdown("""
     <div class="portal-header">
-        <div>
-            <h1>📊 Dashboard</h1>
-            <p>Live overview of operations — Work Management Portal</p>
+        <div style="display:flex;align-items:center;gap:1.5rem;">
+            <img src="https://www.jesagroup.com/themes/custom/jesa/logo.svg"
+                 onerror="this.onerror=null;this.src='https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/JESA_logo.svg/320px-JESA_logo.svg.png';"
+                 style="height:48px;object-fit:contain;filter:brightness(0) invert(1);" alt="JESA"/>
+            <div>
+                <h1>Work Management Portal</h1>
+                <p>Live operations dashboard — Casablanca, Morocco</p>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -464,7 +479,7 @@ def tab_dashboard():
         vals  = [8, 12, 6, 15, 10, 4, 2]
         fig   = go.Figure(go.Bar(
             x=days, y=vals,
-            marker=dict(color='#F0A500', opacity=0.85),
+            marker=dict(color='#0079C2', opacity=0.85),
             hovertemplate='%{x}: %{y} tasks<extra></extra>',
         ))
         fig.update_layout(**plotly_dark_layout(), height=260, title='Tasks per Day')
@@ -474,7 +489,7 @@ def tab_dashboard():
         st.markdown('<div class="sec-title">Equipment Status</div>', unsafe_allow_html=True)
         labels = ["Online", "Maintenance", "Offline"]
         values = [18, 3, 1]
-        colors = ['#3FB950', '#F0A500', '#F85149']
+        colors = ['#0079C2', '#00B4E6', '#E74C3C']
         fig2 = go.Figure(go.Pie(
             labels=labels, values=values,
             hole=.55,
@@ -564,9 +579,9 @@ def tab_leveling():
         before = [12, 8, 14, 11, 9]
         after  = [10, 10, 10, 10, 10]
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=days, y=before, name='Before', line=dict(color='#F85149', width=2, dash='dot')))
-        fig.add_trace(go.Scatter(x=days, y=after,  name='After',  line=dict(color='#3FB950', width=2)))
-        fig.add_hline(y=crew_size, line_dash='dash', line_color='#F0A500', annotation_text='Max capacity')
+        fig.add_trace(go.Scatter(x=days, y=before, name='Before', line=dict(color='#E74C3C', width=2, dash='dot')))
+        fig.add_trace(go.Scatter(x=days, y=after,  name='After',  line=dict(color='#00B4E6', width=2)))
+        fig.add_hline(y=crew_size, line_dash='dash', line_color='#0079C2', annotation_text='Max capacity')
         fig.update_layout(**plotly_dark_layout(), height=280, title='Resource Load Before / After')
         st.plotly_chart(fig, use_container_width=True)
 
@@ -685,7 +700,7 @@ def tab_inspection():
                 fig.add_trace(go.Scatter(
                     x=w_lo, y=w_la,
                     mode='lines',
-                    line=dict(color='#3FB950', width=2, dash='dot'),
+                    line=dict(color='#00B4E6', width=2, dash='dot'),
                     name='Walking Path',
                 ))
                 fig.update_layout(**plotly_dark_layout(), height=500,
@@ -693,9 +708,9 @@ def tab_inspection():
                 st.plotly_chart(fig, use_container_width=True)
 
                 st.markdown(f"""
-                <div class="card" style="border-left:4px solid var(--success);">
+                <div class="card" style="border-left:4px solid var(--accent);">
                     <b>✅ Route optimized</b><br>
-                    <span style="color:var(--muted);">Total walking distance: <b style="color:var(--accent);">{b_dist/1000:.3f} km</b> 
+                    <span style="color:var(--muted);">Total walking distance: <b style="color:var(--accent3);">{b_dist/1000:.3f} km</b> 
                     across <b>{len(sel)}</b> conveyors</span>
                 </div>
                 """, unsafe_allow_html=True)
