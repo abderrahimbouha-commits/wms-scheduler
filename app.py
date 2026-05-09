@@ -992,75 +992,613 @@ def tab_dashboard():
         )
 
 
+# ══════════════════════════════════════════════════════════════
+# GANTT HELPERS  (shared by Smoothing & Leveling)
+# ══════════════════════════════════════════════════════════════
+
+STAGE_COLORS = {
+    "Executed":     "#00B4E6",
+    "In Execution": "#0079C2",
+    "Scheduled":    "#2ECC71",
+    "Prepared":     "#F39C12",
+    "Not Prepared": "#E74C3C",
+}
+
+def build_gantt_df(raw_df, max_rows=300):
+    """
+    Build a Gantt-ready DataFrame from a raw CMMS extraction.
+    Aggregates operations into orders, computes start/end from
+    Début de base + total work hours ÷ 8h/day.
+    Returns (gantt_df, daily_load_df) or raises.
+    """
+    order_col = find_col(raw_df, "order")
+    date_col  = "Début de base"   if "Début de base"   in raw_df.columns else \
+                "Début au plus tôt" if "Début au plus tôt" in raw_df.columns else None
+    work_col  = "Travail"         if "Travail"         in raw_df.columns else \
+                "Durée"           if "Durée"           in raw_df.columns else None
+    res_col   = "Poste de travail" if "Poste de travail" in raw_df.columns else None
+    desc_col  = "Description (ordre)" if "Description (ordre)" in raw_df.columns else \
+                "Description"         if "Description"         in raw_df.columns else None
+    eq_col    = find_col(raw_df, "equipment")
+    sys_col   = find_col(raw_df, "sys_status")
+    usr_col   = find_col(raw_df, "usr_status")
+    pri_col   = find_col(raw_df, "priority")
+
+    if not order_col or not date_col:
+        raise ValueError("Cannot find Order or Start Date column in the file.")
+
+    # Aggregate work per order
+    agg = {date_col: "first"}
+    if work_col:  agg[work_col] = "sum"
+    if res_col:   agg[res_col]  = "first"
+    if desc_col:  agg[desc_col] = "first"
+    if eq_col:    agg[eq_col]   = "first"
+    if sys_col:   agg[sys_col]  = "first"
+    if usr_col:   agg[usr_col]  = "first"
+    if pri_col:   agg[pri_col]  = "first"
+
+    orders = raw_df.groupby(order_col).agg(agg).reset_index()
+    orders.rename(columns={order_col: "_order"}, inplace=True)
+
+    orders["_start"]    = pd.to_datetime(orders[date_col], errors="coerce")
+    orders["_work_h"]   = pd.to_numeric(orders[work_col], errors="coerce").fillna(4) if work_col else 4
+    orders["_dur_days"] = (orders["_work_h"] / 8).clip(lower=0.125)
+    orders["_end"]      = orders["_start"] + pd.to_timedelta(
+                              orders["_dur_days"].apply(lambda x: max(1, int(np.ceil(x)))), unit="D"
+                          )
+    orders["_resource"] = orders[res_col].fillna("N/A")  if res_col  else "N/A"
+    orders["_desc"]     = orders[desc_col].fillna("—").str[:40] if desc_col else orders["_order"].astype(str)
+    orders["_eq"]       = orders[eq_col].fillna("N/A")   if eq_col   else "N/A"
+    orders["_priority"] = orders[pri_col].fillna(0).astype(str).str.replace(".0","",regex=False) if pri_col else "—"
+
+    # Classify stage
+    sys_s = orders[sys_col].astype(str).str.upper() if sys_col else pd.Series([""] * len(orders))
+    usr_s = orders[usr_col].astype(str).str.upper() if usr_col else pd.Series([""] * len(orders))
+    executed  = sys_s.str.contains(r"CONF|CNFP|TECO|COMP|CLSD", na=False)
+    launched  = sys_s.str.contains(r"LANC|REL", na=False) & ~executed
+    scheduled = usr_s.str.contains(r"ATPL|AGAR|SCHD|APPR", na=False) | executed | launched
+    prepared  = usr_s.str.contains(r"CRPR|ATPL|AGAR|AVPD|PREP", na=False) | executed | launched
+
+    def _stage(row):
+        if executed.loc[row.name]:  return "Executed"
+        if launched.loc[row.name]:  return "In Execution"
+        if scheduled.loc[row.name]: return "Scheduled"
+        if prepared.loc[row.name]:  return "Prepared"
+        return "Not Prepared"
+
+    orders["_stage"] = orders.apply(_stage, axis=1)
+    orders["_color"] = orders["_stage"].map(STAGE_COLORS)
+
+    # Drop rows without valid dates
+    orders = orders.dropna(subset=["_start", "_end"])
+    orders = orders.sort_values("_start").reset_index(drop=True)
+
+    # Daily resource load
+    load_rows = []
+    for _, row in orders.iterrows():
+        days = pd.date_range(row["_start"], row["_end"] - pd.Timedelta(days=1), freq="D")
+        for d in days:
+            load_rows.append({"date": d, "resource": row["_resource"], "order": row["_order"]})
+    load_df = pd.DataFrame(load_rows)
+    if not load_df.empty:
+        daily_load = load_df.groupby(["date", "resource"]).size().reset_index(name="count")
+        daily_load = daily_load.pivot(index="date", columns="resource", values="count").fillna(0).astype(int)
+        daily_load["total"] = daily_load.sum(axis=1)
+    else:
+        daily_load = pd.DataFrame()
+
+    return orders, daily_load
+
+
+def make_gantt(orders_df, title="Gantt Chart", max_rows=200, height=600):
+    """Build a Plotly Gantt (timeline) figure from orders_df."""
+    df = orders_df.head(max_rows).copy()
+    df["_label"] = df["_order"].astype(str) + " · " + df["_desc"]
+
+    fig = go.Figure()
+
+    for stage, grp in df.groupby("_stage"):
+        color = STAGE_COLORS.get(stage, "#888")
+        for _, row in grp.iterrows():
+            dur_h = row["_work_h"]
+            fig.add_trace(go.Bar(
+                x=[(row["_end"] - row["_start"]).days],
+                y=[row["_label"]],
+                base=[row["_start"]],
+                orientation="h",
+                marker=dict(color=color, opacity=0.85, line=dict(width=0)),
+                name=stage,
+                legendgroup=stage,
+                showlegend=True if row.name == grp.index[0] else False,
+                hovertemplate=(
+                    f"<b>{row['_order']}</b><br>"
+                    f"{row['_desc']}<br>"
+                    f"Start: {row['_start'].date()}<br>"
+                    f"End:   {row['_end'].date()}<br>"
+                    f"Work:  {dur_h:.1f}h · Resource: {row['_resource']}<br>"
+                    f"Priority: {row['_priority']} · Stage: {stage}"
+                    "<extra></extra>"
+                ),
+            ))
+
+    fig.update_layout(
+        **plotly_dark_layout(),
+        barmode="overlay",
+        height=height,
+        title=title,
+        xaxis=dict(
+            type="date",
+            tickformat="%d %b %Y",
+            showgrid=True,
+            gridcolor="#1A3A55",
+        ),
+        yaxis=dict(
+            autorange="reversed",
+            showgrid=False,
+            tickfont=dict(size=10),
+        ),
+        legend=dict(
+            title="Stage",
+            orientation="h",
+            yanchor="bottom", y=1.01,
+            xanchor="left",   x=0,
+            bgcolor="#071D30",
+            bordercolor="#1A3A55",
+        ),
+        margin=dict(l=300, r=20, t=60, b=40),
+    )
+    return fig
+
+
+def make_load_chart(daily_load, capacity_line=None, title="Daily Resource Load"):
+    """Stacked bar chart of WOs scheduled per day per work centre."""
+    fig = go.Figure()
+    res_colors = ["#0079C2", "#00B4E6", "#2ECC71", "#F39C12", "#E74C3C", "#9B59B6"]
+    resources = [c for c in daily_load.columns if c != "total"]
+
+    for i, res in enumerate(resources):
+        fig.add_trace(go.Bar(
+            x=daily_load.index,
+            y=daily_load[res],
+            name=res,
+            marker_color=res_colors[i % len(res_colors)],
+            hovertemplate=f"<b>{res}</b><br>%{{x|%d %b %Y}}: %{{y}} WOs<extra></extra>",
+        ))
+
+    if capacity_line:
+        fig.add_hline(
+            y=capacity_line,
+            line_dash="dash",
+            line_color="#E74C3C",
+            line_width=2,
+            annotation_text=f"Capacity ({capacity_line} WOs/day)",
+            annotation_font_color="#E74C3C",
+        )
+
+    fig.update_layout(
+        **plotly_dark_layout(),
+        barmode="stack",
+        height=320,
+        title=title,
+        xaxis=dict(type="date", tickformat="%d %b %Y", rangeslider=dict(visible=True, bgcolor="#04111F")),
+        yaxis_title="Work Orders / Day",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    return fig
+
+
+def _no_data_placeholder(tab_name):
+    st.markdown(f"""
+    <div class="card" style="text-align:center;padding:4rem 2rem;color:var(--muted);">
+        <div style="font-size:3rem;margin-bottom:1rem;">📂</div>
+        <div style="font-size:1.1rem;color:var(--text);font-family:'Syne',sans-serif;font-weight:600;margin-bottom:.5rem;">
+            No CMMS extraction loaded
+        </div>
+        <div>Go to the <b>📊 Dashboard</b> tab, upload your extraction file,<br>
+        then come back to <b>{tab_name}</b>.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════
+# TAB: SMOOTHING  — highlight overloaded days on the Gantt
+# ══════════════════════════════════════════════════════════════
 def tab_smoothing():
     st.markdown("""
     <div class="portal-header">
-        <div><h1>🔧 Smoothing</h1><p>Resource smoothing & schedule optimization</p></div>
+        <div><h1>🔧 Resource Smoothing</h1>
+        <p>Gantt view with daily load analysis — identify and visualise overloaded days</p></div>
     </div>
     """, unsafe_allow_html=True)
 
-    st.info("ℹ️ Upload a schedule CSV/Excel to run smoothing analysis.", icon="ℹ️")
+    if "cmms_raw" not in st.session_state:
+        _no_data_placeholder("🔧 Smoothing")
+        return
 
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        st.markdown('<div class="sec-title">Import Schedule</div>', unsafe_allow_html=True)
-        uploaded = st.file_uploader("Upload schedule file (CSV or Excel)", type=["csv", "xlsx"])
-        if uploaded:
-            try:
-                df = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-                st.success(f"✅ Loaded {len(df)} rows × {len(df.columns)} columns.")
-                st.dataframe(df.head(20), use_container_width=True)
+    raw_df = st.session_state["cmms_raw"]
 
-                buf = io.BytesIO()
-                write_styled_excel(df, buf)
-                st.download_button("📥 Download Styled Excel", buf.getvalue(),
-                                   file_name="smoothed_schedule.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            except Exception as e:
-                st.error(f"❌ Error reading file: {e}")
+    with st.spinner("⚙️ Building Gantt…"):
+        try:
+            orders, daily_load = build_gantt_df(raw_df)
+        except Exception as e:
+            st.error(f"❌ {e}")
+            return
 
-    with col2:
-        st.markdown('<div class="sec-title">Smoothing Parameters</div>', unsafe_allow_html=True)
-        with st.form("smooth_form"):
-            max_res   = st.number_input("Max Resources / Day", min_value=1, value=10)
-            start_dt  = st.date_input("Project Start", value=date.today())
-            end_dt    = st.date_input("Project End", value=date.today())
-            priority  = st.selectbox("Smoothing Priority", ["Minimize peaks", "Balance load", "Critical path first"])
-            submitted = st.form_submit_button("Run Smoothing")
-        if submitted:
-            st.success("✅ Smoothing analysis complete. Results exported below.")
+    # ── Controls ──
+    with st.container():
+        cc1, cc2, cc3, cc4 = st.columns([1.5, 1.5, 1, 1])
+        with cc1:
+            res_options = sorted(orders["_resource"].unique().tolist())
+            sel_res = st.multiselect("🏗️ Work Centre", res_options, default=res_options, key="sm_res")
+        with cc2:
+            stage_opts = list(STAGE_COLORS.keys())
+            sel_stage  = st.multiselect("📌 Stage", stage_opts, default=stage_opts, key="sm_stage")
+        with cc3:
+            date_min = orders["_start"].min().date()
+            date_max = orders["_end"].max().date()
+            sm_start = st.date_input("From", value=date_min, min_value=date_min, max_value=date_max, key="sm_s")
+        with cc4:
+            sm_end   = st.date_input("To",   value=min(date_max, date_min + pd.Timedelta(days=90)),
+                                     min_value=date_min, max_value=date_max, key="sm_e")
+
+    capacity = st.slider("⚠️ Overload threshold (WOs/day)", min_value=1, max_value=500, value=50,
+                         help="Days above this line are highlighted as overloaded")
+
+    # Apply filters
+    filt = orders[
+        orders["_resource"].isin(sel_res) &
+        orders["_stage"].isin(sel_stage) &
+        (orders["_start"].dt.date >= sm_start) &
+        (orders["_start"].dt.date <= sm_end)
+    ].copy()
+
+    if filt.empty:
+        st.warning("⚠️ No work orders match the current filters.")
+        return
+
+    n_shown = min(250, len(filt))
+    st.markdown(f'<div class="sec-title">📅 Gantt — {n_shown} of {len(filt)} Work Orders</div>', unsafe_allow_html=True)
+
+    # Gantt
+    fig_gantt = make_gantt(
+        filt.sort_values("_start"),
+        title=f"Work Order Schedule ({sm_start} → {sm_end})",
+        max_rows=n_shown,
+        height=max(400, min(n_shown * 22, 800)),
+    )
+    st.plotly_chart(fig_gantt, use_container_width=True)
+
+    # ── Daily load chart with overload line ──
+    st.markdown('<div class="sec-title">📊 Daily Resource Load & Overload Detection</div>', unsafe_allow_html=True)
+
+    # Recompute load for filtered window
+    load_rows = []
+    for _, row in filt.iterrows():
+        days = pd.date_range(row["_start"], row["_end"] - pd.Timedelta(days=1), freq="D")
+        for d in days:
+            load_rows.append({"date": d, "resource": row["_resource"]})
+
+    if load_rows:
+        ld = pd.DataFrame(load_rows)
+        ld_pivot = ld.groupby(["date","resource"]).size().reset_index(name="count")
+        ld_pivot = ld_pivot.pivot(index="date", columns="resource", values="count").fillna(0).astype(int)
+        ld_pivot["total"] = ld_pivot.sum(axis=1)
+
+        fig_load = make_load_chart(ld_pivot, capacity_line=capacity,
+                                   title=f"Daily WO Load · Overload threshold = {capacity} WOs/day")
+        st.plotly_chart(fig_load, use_container_width=True)
+
+        # Overloaded days table
+        overloaded = ld_pivot[ld_pivot["total"] > capacity].copy()
+        overloaded.index = overloaded.index.strftime("%Y-%m-%d")
+        overloaded.index.name = "Date"
+
+        if not overloaded.empty:
+            st.markdown(f"""
+            <div class="card" style="border-left:4px solid #E74C3C;margin-bottom:1rem;">
+                <b style="color:#E74C3C;">⚠️ {len(overloaded)} overloaded day(s) detected</b>
+                <span style="color:var(--muted);font-size:.85rem;"> — days exceeding {capacity} WOs/day</span>
+            </div>
+            """, unsafe_allow_html=True)
+            st.dataframe(overloaded.reset_index(), use_container_width=True, hide_index=True)
+        else:
+            st.success(f"✅ No overloaded days — all days are within the {capacity} WOs/day threshold.")
+
+    # ── Summary stats ──
+    st.markdown('<div class="sec-title">📋 Smoothing Summary</div>', unsafe_allow_html=True)
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("WOs in window",    f"{len(filt):,}")
+    s2.metric("Total work hours", f"{filt['_work_h'].sum():,.0f} h")
+    s3.metric("Avg WOs/day",      f"{ld_pivot['total'].mean():.1f}" if load_rows else "—")
+    s4.metric("Peak day load",    f"{ld_pivot['total'].max()}" if load_rows else "—")
+
+    # Download
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        filt[["_order","_desc","_resource","_start","_end","_work_h","_stage","_priority"]].rename(columns={
+            "_order":"Ordre","_desc":"Description","_resource":"Centre de travail",
+            "_start":"Début","_end":"Fin","_work_h":"Heures","_stage":"Étape","_priority":"Priorité",
+        }).to_excel(writer, sheet_name="Gantt", index=False)
+        if load_rows:
+            ld_pivot.reset_index().to_excel(writer, sheet_name="Charge journalière", index=False)
+    st.download_button(
+        "📥 Export Gantt + Load (Excel)",
+        buf.getvalue(),
+        file_name=f"JESA_Smoothing_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
 
 
+# ══════════════════════════════════════════════════════════════
+# TAB: LEVELING  — redistribute overloaded WOs to fix peaks
+# ══════════════════════════════════════════════════════════════
 def tab_leveling():
     st.markdown("""
     <div class="portal-header">
-        <div><h1>⚖️ Leveling</h1><p>Resource leveling across work orders</p></div>
+        <div><h1>⚖️ Resource Leveling</h1>
+        <p>Automatically redistribute overloaded work orders to flatten resource peaks</p></div>
     </div>
     """, unsafe_allow_html=True)
-    st.info("ℹ️ Resource leveling resolves over-allocations while respecting dependencies.", icon="ℹ️")
 
-    with st.form("leveling_form"):
-        c1, c2 = st.columns(2)
-        with c1:
-            zone       = st.selectbox("Zone", ["Zone A", "Zone B", "Zone C", "Zone D"])
-            crew_size  = st.number_input("Crew Size", min_value=1, value=5)
-        with c2:
-            shift_type = st.selectbox("Shift Type", ["Day (06:00–18:00)", "Night (18:00–06:00)", "Split"])
-            method     = st.selectbox("Leveling Method", ["Late start", "Early start", "Resource-constrained"])
-        notes = st.text_area("Notes / Special Instructions", height=100)
-        sub   = st.form_submit_button("Apply Leveling")
+    if "cmms_raw" not in st.session_state:
+        _no_data_placeholder("⚖️ Leveling")
+        return
 
-    if sub:
-        st.success(f"✅ Leveling applied for **{zone}** — crew of **{crew_size}** on **{shift_type}** shift.")
-        days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-        before = [12, 8, 14, 11, 9]
-        after  = [10, 10, 10, 10, 10]
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=days, y=before, name='Before', line=dict(color='#E74C3C', width=2, dash='dot')))
-        fig.add_trace(go.Scatter(x=days, y=after,  name='After',  line=dict(color='#00B4E6', width=2)))
-        fig.add_hline(y=crew_size, line_dash='dash', line_color='#0079C2', annotation_text='Max capacity')
-        fig.update_layout(**plotly_dark_layout(), height=280, title='Resource Load Before / After')
-        st.plotly_chart(fig, use_container_width=True)
+    raw_df = st.session_state["cmms_raw"]
+
+    with st.spinner("⚙️ Building schedule…"):
+        try:
+            orders, daily_load = build_gantt_df(raw_df)
+        except Exception as e:
+            st.error(f"❌ {e}")
+            return
+
+    # ── Leveling Controls ──
+    st.markdown('<div class="sec-title">⚙️ Leveling Parameters</div>', unsafe_allow_html=True)
+    lc1, lc2, lc3, lc4 = st.columns([1.5, 1, 1, 1])
+    with lc1:
+        res_opts = sorted(orders["_resource"].unique().tolist())
+        sel_res  = st.multiselect("🏗️ Work Centre to level", res_opts, default=res_opts, key="lv_res")
+    with lc2:
+        capacity = st.number_input("Max WOs / Day (capacity)", min_value=1, value=30,
+                                   help="The algorithm will not exceed this limit per day")
+    with lc3:
+        lv_start = st.date_input("Leveling window start",
+                                  value=orders["_start"].min().date(), key="lv_s")
+    with lc4:
+        lv_end   = st.date_input("Leveling window end",
+                                  value=min(orders["_end"].max().date(),
+                                            orders["_start"].min().date() + pd.Timedelta(days=90)),
+                                  key="lv_e")
+
+    stage_filt = st.multiselect(
+        "📌 Stages to level (only non-executed stages can be moved)",
+        options=["Not Prepared", "Prepared", "Scheduled", "In Execution"],
+        default=["Not Prepared", "Prepared", "Scheduled"],
+        key="lv_stage",
+    )
+
+    run_btn = st.button("▶️ Run Leveling Algorithm", use_container_width=True)
+
+    if not run_btn and "leveled_orders" not in st.session_state:
+        st.markdown("""
+        <div class="card" style="text-align:center;padding:2.5rem;color:var(--muted);">
+            <div style="font-size:2rem;margin-bottom:.6rem;">⚖️</div>
+            Configure the parameters above and click <b>Run Leveling Algorithm</b>.
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    if run_btn:
+        # ── Leveling algorithm ──
+        # Split: fixed (executed/in-execution) + moveable (rest in selected stages)
+        window_start = pd.Timestamp(lv_start)
+        window_end   = pd.Timestamp(lv_end)
+
+        in_window = (
+            orders["_resource"].isin(sel_res) &
+            (orders["_start"] >= window_start) &
+            (orders["_start"] <= window_end)
+        )
+        moveable = in_window & orders["_stage"].isin(stage_filt)
+        fixed    = in_window & ~moveable
+
+        fixed_orders   = orders[fixed].copy()
+        move_orders    = orders[moveable].copy().sort_values(["_priority","_start"])
+        outside_orders = orders[~in_window].copy()
+
+        # Track daily load per resource (seeded with fixed orders)
+        from collections import defaultdict
+        daily_count = defaultdict(lambda: defaultdict(int))  # date -> resource -> count
+        for _, row in fixed_orders.iterrows():
+            for d in pd.date_range(row["_start"], row["_end"] - pd.Timedelta(days=1), freq="D"):
+                daily_count[d][row["_resource"]] += 1
+
+        leveled_rows = []
+        for _, row in move_orders.iterrows():
+            res      = row["_resource"]
+            dur_days = max(1, int(np.ceil(row["_dur_days"])))
+            # Find earliest start >= original start where capacity not exceeded
+            candidate = max(row["_start"], window_start)
+            placed    = False
+            for _ in range(365):
+                # Check if all days in the duration window fit
+                trial_days = pd.date_range(candidate, periods=dur_days, freq="D")
+                if all(daily_count[d][res] < capacity for d in trial_days):
+                    for d in trial_days:
+                        daily_count[d][res] += 1
+                    new_row = row.copy()
+                    new_row["_start_leveled"] = candidate
+                    new_row["_end_leveled"]   = candidate + pd.Timedelta(days=dur_days)
+                    new_row["_shifted"]       = (candidate - row["_start"]).days
+                    leveled_rows.append(new_row)
+                    placed = True
+                    break
+                candidate += pd.Timedelta(days=1)
+            if not placed:
+                new_row = row.copy()
+                new_row["_start_leveled"] = row["_start"]
+                new_row["_end_leveled"]   = row["_end"]
+                new_row["_shifted"]       = 0
+                leveled_rows.append(new_row)
+
+        leveled_df = pd.DataFrame(leveled_rows) if leveled_rows else pd.DataFrame()
+
+        # Combine: fixed (no shift) + leveled + outside
+        fixed_orders["_start_leveled"] = fixed_orders["_start"]
+        fixed_orders["_end_leveled"]   = fixed_orders["_end"]
+        fixed_orders["_shifted"]       = 0
+        outside_orders["_start_leveled"] = outside_orders["_start"]
+        outside_orders["_end_leveled"]   = outside_orders["_end"]
+        outside_orders["_shifted"]       = 0
+
+        all_leveled = pd.concat([fixed_orders, leveled_df, outside_orders], ignore_index=True)
+        st.session_state["leveled_orders"] = all_leveled
+        st.session_state["lv_capacity"]    = capacity
+        st.session_state["lv_res"]         = sel_res
+        st.session_state["lv_window"]      = (window_start, window_end)
+
+    if "leveled_orders" not in st.session_state:
+        return
+
+    all_leveled  = st.session_state["leveled_orders"]
+    capacity     = st.session_state["lv_capacity"]
+    sel_res_used = st.session_state["lv_res"]
+    w_start, w_end = st.session_state["lv_window"]
+
+    # ── Before / After load comparison ──
+    st.markdown('<div class="sec-title">📊 Before vs After Leveling — Daily Load</div>', unsafe_allow_html=True)
+
+    def compute_daily_load_col(df, start_col, end_col, resources):
+        rows = []
+        for _, row in df[df["_resource"].isin(resources)].iterrows():
+            if pd.isna(row[start_col]) or pd.isna(row[end_col]):
+                continue
+            for d in pd.date_range(row[start_col], row[end_col] - pd.Timedelta(days=1), freq="D"):
+                if w_start <= d <= w_end:
+                    rows.append({"date": d, "resource": row["_resource"]})
+        if not rows:
+            return pd.DataFrame()
+        ld = pd.DataFrame(rows)
+        pv = ld.groupby(["date","resource"]).size().reset_index(name="count")
+        pv = pv.pivot(index="date", columns="resource", values="count").fillna(0).astype(int)
+        pv["total"] = pv.sum(axis=1)
+        return pv
+
+    before_ld = compute_daily_load_col(all_leveled, "_start",         "_end",         sel_res_used)
+    after_ld  = compute_daily_load_col(all_leveled, "_start_leveled", "_end_leveled", sel_res_used)
+
+    if not before_ld.empty and not after_ld.empty:
+        fig_compare = go.Figure()
+        fig_compare.add_trace(go.Scatter(
+            x=before_ld.index, y=before_ld["total"],
+            name="Before Leveling", mode="lines",
+            line=dict(color="#E74C3C", width=2, dash="dot"),
+            fill="tozeroy", fillcolor="rgba(231,76,60,0.08)",
+        ))
+        fig_compare.add_trace(go.Scatter(
+            x=after_ld.index, y=after_ld["total"],
+            name="After Leveling", mode="lines",
+            line=dict(color="#00B4E6", width=2),
+            fill="tozeroy", fillcolor="rgba(0,180,230,0.08)",
+        ))
+        fig_compare.add_hline(
+            y=capacity, line_dash="dash", line_color="#F39C12", line_width=2,
+            annotation_text=f"Capacity ({capacity}/day)", annotation_font_color="#F39C12",
+        )
+        fig_compare.update_layout(
+            **plotly_dark_layout(), height=320,
+            title="Daily Load: Before vs After Leveling",
+            xaxis=dict(type="date", tickformat="%d %b %Y",
+                       rangeslider=dict(visible=True, bgcolor="#04111F")),
+            yaxis_title="Work Orders / Day",
+        )
+        st.plotly_chart(fig_compare, use_container_width=True)
+
+        # Metrics
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Peak Before", int(before_ld["total"].max()))
+        m2.metric("Peak After",  int(after_ld["total"].max()),
+                  delta=f"{int(after_ld['total'].max()) - int(before_ld['total'].max())} WOs",
+                  delta_color="inverse")
+        m3.metric("Overloaded days before",
+                  int((before_ld["total"] > capacity).sum()))
+        m4.metric("Overloaded days after",
+                  int((after_ld["total"] > capacity).sum()),
+                  delta=f"{int((after_ld['total']>capacity).sum()) - int((before_ld['total']>capacity).sum())}",
+                  delta_color="inverse")
+        shifted = all_leveled[all_leveled.get("_shifted", pd.Series(0)) > 0] if "_shifted" in all_leveled.columns else pd.DataFrame()
+        m5.metric("WOs shifted", len(shifted))
+
+    # ── Gantt: Before vs After (side by side tabs) ──
+    st.markdown('<div class="sec-title">📅 Gantt Charts — Before & After Leveling</div>', unsafe_allow_html=True)
+    g1, g2 = st.tabs(["📅 Before Leveling", "📅 After Leveling"])
+
+    in_window_mask = (
+        all_leveled["_resource"].isin(sel_res_used) &
+        (all_leveled["_start"] >= w_start) &
+        (all_leveled["_start"] <= w_end)
+    )
+    n_gantt = min(200, in_window_mask.sum())
+    gantt_h = max(400, min(n_gantt * 20, 800))
+
+    with g1:
+        before_df = all_leveled[in_window_mask].copy()
+        before_df["_end_plot"]   = before_df["_end"]
+        before_df["_start_plot"] = before_df["_start"]
+        before_plot = before_df.copy()
+        before_plot["_start"] = before_plot["_start_plot"]
+        before_plot["_end"]   = before_plot["_end_plot"]
+        st.plotly_chart(
+            make_gantt(before_plot.head(n_gantt), "Gantt — Before Leveling", max_rows=n_gantt, height=gantt_h),
+            use_container_width=True,
+        )
+
+    with g2:
+        after_df = all_leveled[in_window_mask].copy()
+        after_df["_start"] = after_df["_start_leveled"]
+        after_df["_end"]   = after_df["_end_leveled"]
+        st.plotly_chart(
+            make_gantt(after_df.head(n_gantt), "Gantt — After Leveling", max_rows=n_gantt, height=gantt_h),
+            use_container_width=True,
+        )
+
+    # ── Shifted WOs detail ──
+    if "_shifted" in all_leveled.columns:
+        shifted_df = all_leveled[all_leveled["_shifted"] > 0].copy()
+        if not shifted_df.empty:
+            st.markdown('<div class="sec-title">🔀 Shifted Work Orders Detail</div>', unsafe_allow_html=True)
+            display_df = shifted_df[["_order","_desc","_resource","_stage","_start","_start_leveled","_shifted"]].rename(columns={
+                "_order":"Ordre","_desc":"Description","_resource":"Centre de travail",
+                "_stage":"Étape","_start":"Date originale",
+                "_start_leveled":"Date nivelée","_shifted":"Décalage (jours)",
+            })
+            st.dataframe(display_df, use_container_width=True, hide_index=True, height=300)
+
+    # ── Download ──
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        export_cols = ["_order","_desc","_resource","_stage","_priority",
+                       "_start","_end","_work_h","_start_leveled","_end_leveled","_shifted"]
+        export_cols = [c for c in export_cols if c in all_leveled.columns]
+        all_leveled[export_cols].rename(columns={
+            "_order":"Ordre","_desc":"Description","_resource":"Centre de travail",
+            "_stage":"Étape","_priority":"Priorité","_start":"Début original",
+            "_end":"Fin originale","_work_h":"Heures",
+            "_start_leveled":"Début nivelé","_end_leveled":"Fin nivelée","_shifted":"Décalage (j)",
+        }).to_excel(writer, sheet_name="Leveling", index=False)
+        if not before_ld.empty:
+            before_ld.reset_index().to_excel(writer, sheet_name="Charge avant", index=False)
+        if not after_ld.empty:
+            after_ld.reset_index().to_excel(writer, sheet_name="Charge après", index=False)
+    st.download_button(
+        "📥 Export Leveling Plan (Excel)",
+        buf.getvalue(),
+        file_name=f"JESA_Leveling_{datetime.now().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
 
 
 def tab_shutdown():
